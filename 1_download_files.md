@@ -55,5 +55,5 @@ Readme:
   working files (`nextflow/`, `.command.*`, `.exitcode`): not needed for analysis
 
 Script for downloading:
-https://github.com/dannyjackson/Exendin_evolution/1_download_files.md
+https://github.com/dannyjackson/Exendin_evolution/blob/main/1_download_files.md
 ```
