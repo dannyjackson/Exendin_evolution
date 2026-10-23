@@ -61,7 +61,7 @@ python3 ${SCRIPTDIR}/2b_select_exendin_loci.py \
     --status FI,I --min-cds 150 \
     --outdir ${OUT}/loci_HelSus
 
-cut -f1,7,8,11,13,15-17 ${OUT}/loci_HelSus/loci_selected.tsv
+cut -f1,2,8,9,12,14,16-18 ${OUT}/loci_HelSus/loci_selected.tsv
 ```
 Use `--status FI,I` for selection analyses. A second run with `--status FI,I,PI` can be
 used for the gene tree only (more copies, but partial sequences).

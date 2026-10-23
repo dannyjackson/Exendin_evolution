@@ -27,6 +27,8 @@ Outputs (--outdir)
   exendin_cds.fa        included exendin loci, CDS without the final stop codon
   anchor_cds.fa         included anchor orthologs (same format)
   exendin_plus_anchor_cds.fa
+  others_cds.fa, family_cds.fa   with --other: the other family genes, and
+                        everything together (for the gene-family tree)
   *_aa.fa               translations of the above (for checking peptides)
 
 Usage
@@ -87,14 +89,18 @@ def main():
     ap.add_argument("--status", default="FI,I", help="statuses allowed into the alignment")
     ap.add_argument("--min-cds", type=int, default=150, help="minimum CDS length (bp) to include")
     ap.add_argument("--max-internal-stops", type=int, default=0)
+    ap.add_argument("--other", default="",
+                    help="other family genes to carry along, GENE=LABEL,... (e.g. LOC_00001483=GCG); "
+                         "their loci are named <Query>_<LABEL> and written to others_*.fa and family_*.fa")
     a = ap.parse_args()
 
     genes = set(a.genes.split(","))
+    other = dict(x.split("=", 1) for x in a.other.split(",") if x)
     allowed = set(a.status.split(","))
     projs = read_tsv(os.path.join(a.collect_dir, "projections.tsv"))
     loci = read_tsv(os.path.join(a.collect_dir, "loci.tsv"))
     seqs = {}
-    for g in genes | {a.anchor}:
+    for g in genes | {a.anchor} | set(other):
         seqs.update(read_collect_fasta(os.path.join(a.collect_dir, f"{g}.nucleotide.fa")))
     if not seqs:
         sys.exit("No sequences found: check that 2a was run with --outdir and wrote *.nucleotide.fa")
@@ -114,15 +120,26 @@ def main():
 
     rows, used_names = [], set()
     for L in loci:
-        hit = set(L["ref_genes_hitting"].split(","))
-        is_anchor = hit == {a.anchor}
-        if not (hit & genes or is_anchor):
-            continue
         q, chrom, strand = L["query"], L["q_chrom"], L["q_strand"]
         s, e = int(L["q_start"]), int(L["q_end"])
-        cands = [p for p in by_q[q] if p["q_chrom"] == chrom and p["q_strand"] == strand
-                 and int(p["q_start"]) < e and int(p["q_end"]) > s
-                 and (p["ref_gene"] in genes or (is_anchor and p["ref_gene"] == a.anchor))]
+        here = [p for p in by_q[q] if p["q_chrom"] == chrom and p["q_strand"] == strand
+                and int(p["q_start"]) < e and int(p["q_end"]) > s]
+        # Which gene is this locus? A gene only claims a locus through a projection
+        # TOGA2 classified as orthologous (q_gene assigned). Otherwise any family
+        # gene projected along a weak paralogous chain (e.g. proglucagon onto an
+        # exendin copy) would relabel the locus.
+        orth = {p["ref_gene"] for p in here if p["q_gene"] not in ("NA", "None", "")}
+        hit_other = sorted(orth & set(other))
+        if hit_other:
+            kind, use = "other", set(hit_other)
+        elif a.anchor in orth:
+            kind, use = "anchor", {a.anchor}
+        elif {p["ref_gene"] for p in here} & genes:
+            kind, use = "exendin", genes
+        else:
+            continue                 # only non-orthologous projections of other genes
+        is_anchor = kind == "anchor"
+        cands = [p for p in here if p["ref_gene"] in use]
 
         def key(p):
             return (RANK.get(p["status"], 99), -int(p["cds_bp"] or 0), p["on_anchor_chain"] != "yes")
@@ -131,7 +148,9 @@ def main():
 
         # position relative to anchor
         anc = anchor.get(q)
-        if is_anchor:
+        if kind == "other":
+            base, off_kb, rel = f"{q}_{other[hit_other[0]]}", float("nan"), "NA"
+        elif is_anchor:
             base, off_kb, rel = f"{q}_ANC", 0.0, "self"
         elif anc and anc["q_chrom"] == chrom:
             amid = (int(anc["q_start"]) + int(anc["q_end"])) / 2
@@ -176,10 +195,11 @@ def main():
             chosen_projection=best["projection"] if best else "NA",
             status=best["status"] if best else "NA", on_anchor_chain=best["on_anchor_chain"] if best else "NA",
             cds_bp=len(nt), final_stop=final_stop, internal_stops=istops,
-            included="yes" if include else "no", notes=";".join(reasons), aa=aa, nt=nt, is_anchor=is_anchor))
+            included="yes" if include else "no", notes=";".join(reasons), aa=aa, nt=nt, is_anchor=is_anchor,
+            kind=kind, group=other[hit_other[0]] if hit_other else ("ANC" if is_anchor else "EXN")))
 
     os.makedirs(a.outdir, exist_ok=True)
-    cols = ["tip", "query", "q_chrom", "q_start", "q_end", "q_strand", "offset_kb", "strand_vs_anchor",
+    cols = ["tip", "group", "query", "q_chrom", "q_start", "q_end", "q_strand", "offset_kb", "strand_vs_anchor",
             "ref_genes_hitting", "chosen_projection", "status", "on_anchor_chain", "cds_bp", "final_stop",
             "internal_stops", "included", "notes", "aa"]
     rows.sort(key=lambda r: (r["query"], r["tip"]))
@@ -192,12 +212,17 @@ def main():
         with open(os.path.join(a.outdir, fname), "w") as fh:
             for r in sel:
                 fh.write(f">{r['tip']}\n{r[field]}\n")
-    ex = [r for r in rows if r["included"] == "yes" and not r["is_anchor"]]
-    an = [r for r in rows if r["included"] == "yes" and r["is_anchor"]]
+    ex = [r for r in rows if r["included"] == "yes" and r["kind"] == "exendin"]
+    an = [r for r in rows if r["included"] == "yes" and r["kind"] == "anchor"]
+    ot = [r for r in rows if r["included"] == "yes" and r["kind"] == "other"]
     dump("exendin_cds.fa", ex, "nt"); dump("exendin_aa.fa", ex, "aa")
     dump("anchor_cds.fa", an, "nt"); dump("anchor_aa.fa", an, "aa")
     dump("exendin_plus_anchor_cds.fa", ex + an, "nt"); dump("exendin_plus_anchor_aa.fa", ex + an, "aa")
-    print(f"loci considered: {len(rows)}  exendin included: {len(ex)}  anchor included: {len(an)}", file=sys.stderr)
+    if other:
+        dump("others_cds.fa", ot, "nt"); dump("others_aa.fa", ot, "aa")
+        dump("family_cds.fa", ex + an + ot, "nt"); dump("family_aa.fa", ex + an + ot, "aa")
+    print(f"loci considered: {len(rows)}  exendin included: {len(ex)}  anchor included: {len(an)}  "
+          f"other family included: {len(ot)}", file=sys.stderr)
 
 
 if __name__ == "__main__":
