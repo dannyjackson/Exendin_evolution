@@ -74,21 +74,41 @@ def read_bed(path, genes):
     return out
 
 
-def read_fasta(path, wanted):
-    """Return {projection: seq} for headers whose first token equals or starts with a wanted projection id."""
-    seqs, cur = {}, None
+def read_fasta(path, wanted, label=""):
+    """Return {projection: seq} for records whose first header token is a wanted projection id.
+
+    TOGA FASTA files can hold both the reference and the query record under the
+    same id. If an id occurs more than once, keep the record whose header says
+    'query' (and not 'reference'); if that is still ambiguous, skip it and warn,
+    rather than silently concatenating two sequences.
+    """
+    recs, cur = {}, None
     if not os.path.exists(path):
-        return seqs
+        print(f"[warn] missing {path}", file=sys.stderr)
+        return {}
     with opener(path) as fh:
         for line in fh:
             if line.startswith(">"):
-                key = re.split(r"[\s|]", line[1:].strip())[0]
-                cur = key if key in wanted else None
-                if cur is not None:
-                    seqs.setdefault(cur, [])
+                head = line[1:].strip()
+                key = re.split(r"[\s|]", head)[0]
+                if key in wanted:
+                    cur = [head, []]
+                    recs.setdefault(key, []).append(cur)
+                else:
+                    cur = None
             elif cur is not None:
-                seqs[cur].append(line.strip())
-    return {k: "".join(v) for k, v in seqs.items()}
+                cur[1].append(line.strip())
+    out = {}
+    for key, rs in recs.items():
+        if len(rs) > 1:
+            q = [r for r in rs if re.search(r"query", r[0], re.I) and not re.search(r"ref", r[0], re.I)]
+            if len(q) != 1:
+                print(f"[warn] {label} {key}: {len(rs)} records, cannot tell which is the query; skipped. "
+                      f"Headers: {[r[0] for r in rs]}", file=sys.stderr)
+                continue
+            rs = q
+        out[key] = "".join(rs[0][1])
+    return out
 
 
 def main():
@@ -177,7 +197,7 @@ def main():
             q = qd.replace("query_", "")
             if not wanted[q]:
                 continue
-            seqs = read_fasta(os.path.join(a.run, qd, f"{kind}.fa.gz"), set(wanted[q]))
+            seqs = read_fasta(os.path.join(a.run, qd, f"{kind}.fa.gz"), set(wanted[q]), label=f"{q}/{kind}")
             for pr, seq in seqs.items():
                 r = wanted[q][pr]
                 fh = handles.get(r[1])
