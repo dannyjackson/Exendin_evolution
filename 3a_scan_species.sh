@@ -69,7 +69,7 @@ done
 
 echo
 echo "=== summary"
-{ echo -e "species\tloci\tcandidate_genes\tremnants\tdisabled"
+{ echo -e "species\tloci\tcandidate_genes\tremnants\tflagged\tintact"
   for F in scan_*_loci.tsv; do
     [[ -f $F ]] || continue
     S=${F#scan_}; S=${S%_loci.tsv}
@@ -77,6 +77,7 @@ echo "=== summary"
         n++
         if ($7 ~ /^candidate_gene/) c++; else r++
         if ($7 ~ /premature_stop|domain_starts_/) d++
-      } END{printf "%s\t%d\t%d\t%d\t%d\n", S, n+0, c+0, r+0, d+0}' "$F"
+        if ($7 ~ /^candidate_gene$/) i++
+      } END{printf "%s\t%d\t%d\t%d\t%d\t%d\n", S, n+0, c+0, r+0, d+0, i+0}' "$F"
   done
 } | { command -v column >/dev/null && column -t || cat; }
