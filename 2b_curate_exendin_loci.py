@@ -210,6 +210,9 @@ def main():
         for act, val, note in cur.get((q, f["ch"], f["s"]), []):
             if act == "drop":
                 why.append("curation_drop")
+            elif act == "keep":
+                # override sequence-quality filters; a missing sequence cannot be overridden
+                why = [w for w in why if w in ("no_projection", "no_sequence")]
             elif act == "label" and val:
                 labels.append(val)
             if note:
@@ -238,7 +241,7 @@ def main():
     with open(os.path.join(a.outdir, "curated_aa.fa"), "w") as fa, \
          open(os.path.join(a.outdir, "curated_cds.fa"), "w") as fn:
         for r in keep:
-            fa.write(f">{r['name']}\n{r['protein']}\n")
+            fa.write(f">{r['name']}\n{r['protein'].replace('*', 'X')}\n")
             fn.write(f">{r['name']}\n{r['_nt']}\n")
     nq = len({r["query"] for r in keep})
     print(f"[info] {len(rows)} loci; {len(keep)} in the tree ({sum(r['kind']=='anchor' for r in keep)} ANC, "
