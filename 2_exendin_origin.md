@@ -86,6 +86,32 @@ cut -f1,3,8,9,11,12,13,14 curated/loci_curated.tsv
 Filters: TOGA2 status intact (FI or I), CDS ≥150 bp, no internal stop. Check that every
 species has an `_ANC` row and that no curation warnings were printed.
 
+One additional curation step: HelCha_A129_EX3 is still 594 bp (198 aa) against 87 aa for its HelSus ortholog. Trim the 5′ extension to the real start codon — the Met nearest the hormone domain
+```
+python3 - <<'EOF'
+import re
+MOTIF = re.compile(r"[HY][ASG][DEQ][AGP][ATVIGSM]F[TSI]")
+recs, name = [], None
+for line in open("curated/curated_aa.fa"):
+    line = line.strip()
+    if line.startswith(">"):
+        name = line[1:]; recs.append([name, ""])
+    elif name:
+        recs[-1][1] += line
+with open("curated/curated_aa.trimmed.fa", "w") as out:
+    for n, s in recs:
+        if len(s) > 120:                       # only the over-long models
+            m = MOTIF.search(s)
+            if m:
+                start = s.rfind("M", 0, m.start())   # last Met before the domain
+                if start > 0:
+                    print(f"trimmed {n}: {len(s)} -> {len(s) - start} aa")
+                    s = s[start:]
+        out.write(f">{n}\n{s}\n")
+EOF
+
+seqkit fx2tab -n -l curated/curated_aa.trimmed.fa | sort -k2,2n | tail -5
+```
 ## 3. Assign each gene to the published nomenclature
 Compares the **mature peptide** of every curated protein with the published peptides in
 `2_reference_peptides.fa` (exendin-1 to -4, and the glucagon, GLP-1, GLP-2 and PACAP
@@ -142,22 +168,24 @@ If it has more than one isoform, keep the longest.
 
 ## 5. Align
 ```
-cat curated/curated_aa.fa outgroup.faa > exendin_origin_aa.fa
+cat curated/curated_aa.trimmed.fa outgroup.faa > exendin_origin_aa.fa
 mafft --localpair --maxiterate 1000 exendin_origin_aa.fa > exendin_origin.aln.fa
 ```
 
 ## 6. Tree, rooted on zebra finch
 ```
-$IQTREE -s exendin_origin.aln.fa -m MFP -B 1000 -alrt 1000 -o TaeGut_ANC -T AUTO \
+$IQTREE -s exendin_origin.aln.fa -m MFP -B 1000 -alrt 1000 -o TaeGut_GCGL -T AUTO \
         --prefix exendin_origin
+
 grep "Best-fit model according to" exendin_origin.iqtree
 ```
 
 ## 7. Draw
 ```
-python3 ${SCRIPTDIR}/2c_draw_tree_svg.py --tree exendin_origin.treefile --outgroup TaeGut_ANC \
-    --title "Exendin-family proteins, SLC4A8–AQP5 interval, rooted on zebra finch ANC/GCGL" \
-    > exendin_origin.svg
+python3 ${SCRIPTDIR}/2c_draw_tree.py --tree exendin_origin.treefile --outgroup TaeGut_GCGL \
+    --title "Exendin-family proteins, SLC4A8–AQP5 interval, rooted on zebra finch GCGL" \
+    --png exendin_origin.png > exendin_origin.svg
+
 ```
 Node labels are SH-aLRT/UFBoot; trust a node at ≥80 / ≥95. Bold = *Heloderma*.
 

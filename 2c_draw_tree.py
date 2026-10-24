@@ -16,7 +16,7 @@ Usage
   python3 2c_draw_tree_svg.py --tree exendin_origin.treefile --outgroup TaeGut_ANC \
       --title "..." > exendin_origin.svg
 """
-import argparse, html, re, sys
+import argparse, html, os, re, sys
 
 PALETTE = ["#0072B2", "#D55E00", "#009E73", "#CC79A7", "#E69F00", "#56B4E9",
            "#7F3C8D", "#8C564B", "#B8860B", "#2F4F4F", "#E7298A", "#666666"]
@@ -77,6 +77,51 @@ def support(name):
     except ValueError:
         return None, None
 
+def write_png(svg, path, w, h):
+    """Render the SVG with whatever converter is installed."""
+    import shutil, subprocess, tempfile
+    with tempfile.NamedTemporaryFile("w", suffix=".svg", delete=False) as fh:
+        fh.write(svg)
+        tmp = fh.name
+    cmds = []
+    if shutil.which("rsvg-convert"):
+        cmds.append(["rsvg-convert", "-w", str(w), "-h", str(h), "-o", path, tmp])
+    if shutil.which("inkscape"):
+        cmds.append(["inkscape", tmp, "--export-type=png", f"--export-filename={path}",
+                     f"--export-width={w}"])
+    if shutil.which("convert"):
+        cmds.append(["convert", "-density", "150", "-background", "white", tmp, path])
+    for c in cmds:
+        try:
+            if subprocess.run(c, capture_output=True).returncode == 0 and os.path.exists(path):
+                print(f"[info] wrote {path} with {c[0]}", file=sys.stderr)
+                os.unlink(tmp)
+                return
+        except Exception:
+            pass
+    try:
+        import cairosvg
+        cairosvg.svg2png(bytestring=svg.encode(), write_to=path, output_width=w)
+        print(f"[info] wrote {path} with cairosvg", file=sys.stderr)
+        os.unlink(tmp)
+        return
+    except ImportError:
+        pass
+    except Exception as e:
+        print(f"[warn] cairosvg failed: {e}", file=sys.stderr)
+    for b in ("chromium", "chromium-browser", "google-chrome"):
+        if shutil.which(b):
+            r = subprocess.run([b, "--headless", "--no-sandbox", "--disable-gpu",
+                                f"--screenshot={path}", f"--window-size={w},{h}",
+                                "file://" + tmp], capture_output=True)
+            if os.path.exists(path):
+                print(f"[info] wrote {path} with {b}", file=sys.stderr)
+                os.unlink(tmp)
+                return
+    os.unlink(tmp)
+    print(f"[warn] no SVG converter found; PNG not written. Install one with:\n"
+          f"       mamba install -c conda-forge cairosvg\n"
+          f"       (or: module load ImageMagick / inkscape)", file=sys.stderr)
 
 def main():
     ap = argparse.ArgumentParser()
@@ -87,6 +132,9 @@ def main():
     ap.add_argument("--min-support", type=float, default=95)
     ap.add_argument("--width", type=int, default=1000)
     ap.add_argument("--row", type=int, default=15, help="pixels per tip")
+    ap.add_argument("--png", help="also write a PNG here (needs rsvg-convert, inkscape, "
+                                  "cairosvg, ImageMagick or chromium)")
+    ap.add_argument("--png-scale", type=float, default=2.0, help="PNG resolution multiplier")
     a = ap.parse_args()
 
     root = parse(open(a.tree).read())
@@ -173,8 +221,10 @@ def main():
     out.append(f'<text x="{a.width - 20}" y="{sy + 14}" text-anchor="end" fill="#777">'
                f'support: SH-aLRT/UFBoot; dark = UFBoot ≥ {a.min_support:g}. Bold = Heloderma</text>')
     out.append("</svg>")
-    print("\n".join(out))
-
+    svg = "\n".join(out)
+    print(svg)
+    if a.png:
+        write_png(svg, a.png, int(a.width * a.png_scale), int(H * a.png_scale))
 
 if __name__ == "__main__":
     main()
