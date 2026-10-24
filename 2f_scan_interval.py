@@ -53,12 +53,16 @@ def residue_at(qseq, sseq, qstart, target):
     return ""
 
 
-def compatible(h, x):
-    """Can these two hits be exons of one gene? Hits from different queries always can."""
+def compatible(h, x, tol):
+    """Can these two hits be exons of one gene? Hits from different queries always can.
+
+    `tol` allows the small query overlap BLAST reports at an exon boundary, where the
+    codon is split across the junction and both HSPs claim the shared residue.
+    """
     if h["q"] != x["q"]:
         return True
     # hits arrive sorted by genomic position, so h is downstream of x
-    return h["qs"] > x["qe"] if h["strand"] == "+" else h["qe"] < x["qs"]
+    return h["qs"] > x["qe"] - tol if h["strand"] == "+" else h["qe"] < x["qs"] + tol
 
 
 def read_fasta(path):
@@ -90,6 +94,8 @@ def main():
     ap.add_argument("--cluster-kb", type=float, default=10.0,
                     help="maximum gap between hits of one gene; hits whose QUERY ranges "
                          "overlap are always split, so tandem copies stay separate")
+    ap.add_argument("--query-overlap", type=int, default=5,
+                    help="query residues two HSPs of one gene may share at an exon boundary")
     ap.add_argument("--default-domain-start", type=int, default=45,
                     help="used for a query with no recognisable hormone-domain motif")
     a = ap.parse_args()
@@ -158,7 +164,7 @@ def main():
                 break
             if L[0]["strand"] != h["strand"]:
                 continue
-            if not all(compatible(h, x) for x in L):
+            if not all(compatible(h, x, a.query_overlap) for x in L):
                 continue                      # same query, same part -> another copy
             L.append(h)
             break
@@ -176,6 +182,20 @@ def main():
                 fh.write(f"{i}\t{h['q']}\t{h['qs']}\t{h['qe']}\t{h['lo']}\t{h['hi']}\t{h['strand']}\t"
                          f"{h['part']}\t{h['pid']:.1f}\t{h['ln']}\t{h['stops']}\t{h['first']}\t"
                          f"{h['ev']}\t{h['sseq']}\n")
+
+    # Two loci that physically overlap in the genome cannot be separate genes: merge
+    # them. This catches cases the per-query rule splits because BLAST reported several
+    # overlapping HSPs from one query across the same gene.
+    changed = True
+    while changed:
+        changed, merged = False, []
+        loci.sort(key=lambda L: min(h["lo"] for h in L))
+        for L in loci:
+            if merged and min(h["lo"] for h in L) <= max(h["hi"] for h in merged[-1]):
+                merged[-1].extend(L); changed = True
+            else:
+                merged.append(L)
+        loci = merged
 
     rows = []
     for i, L in enumerate(loci, 1):
