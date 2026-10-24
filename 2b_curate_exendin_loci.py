@@ -28,6 +28,10 @@ query, contig and locus start exactly as written in 2a's loci.tsv:
   query  q_chrom  q_start  action  value  note
   action = anchor : use this locus as ANC (when TOGA2 found no ANC projection)
            drop   : exclude from the tree (value ignored)
+           keep   : override the sequence-quality filters
+           replace: use the sequence in <value>.aa.fa / <value>.cds.fa instead of the
+                    projection (the output of 2e_rescue_locus.py), for loci whose TOGA2
+                    model is wrong because the reference isoform is mis-annotated
            label  : append _<value> to the name (e.g. EX2)
 
 Outputs (--outdir)
@@ -67,6 +71,14 @@ def read_collect_fasta(path):
             elif key:
                 out[key].append(line.strip())
     return {k: re.sub(r"[^ACGTN]", "", "".join(v).upper()) for k, v in out.items()}
+
+
+def read_one(path):
+    """Return the single sequence in a FASTA file, or '' if it cannot be read."""
+    try:
+        return "".join(l.strip() for l in open(path) if not l.startswith(">")).upper()
+    except OSError:
+        return ""
 
 
 def read_curation(path):
@@ -206,10 +218,12 @@ def main():
                 why.append(f"cds<{a.min_cds}")
             if "*" in aa:
                 why.append(f"internal_stops={aa.count('*')}")
-        labels, notes = [], []
+        labels, notes, repl = [], [], None
         for act, val, note in cur.get((q, f["ch"], f["s"]), []):
             if act == "drop":
                 why.append("curation_drop")
+            elif act == "replace" and val:
+                repl = val
             elif act == "keep":
                 # override sequence-quality filters; a missing sequence cannot be overridden
                 why = [w for w in why if w in ("no_projection", "no_sequence")]
@@ -217,6 +231,15 @@ def main():
                 labels.append(val)
             if note:
                 notes.append(note)
+        if repl:
+            raa, rnt = read_one(repl + ".aa.fa"), read_one(repl + ".cds.fa")
+            if raa and rnt:
+                aa, nt = raa.rstrip("*"), rnt
+                why = [w for w in why if w == "curation_drop"]   # the rescued model replaces the projection
+                notes.append(f"sequence from {repl}.aa.fa / .cds.fa")
+            else:
+                print(f"[warn] replace: cannot read {repl}.aa.fa or {repl}.cds.fa", file=sys.stderr)
+                why.append("replace_failed")
         if labels:
             name = name + "_" + "_".join(labels)
         rows.append(dict(

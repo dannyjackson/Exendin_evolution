@@ -1,6 +1,7 @@
 # Curation decisions for 2b_curate_exendin_loci.py (tab-separated).
 # Loci are identified by query, contig and locus start exactly as in collect/loci.tsv.
-# action: anchor = use as ANC | drop = leave out of the tree | label = append _<value> to the name
+# action: anchor = use as ANC | drop = leave out of the tree | keep = override quality filters
+#         replace = use <value>.aa.fa / <value>.cds.fa from 2e_rescue_locus.py | label = append _<value> to the name
 query	q_chrom	q_start	action	value	note
 HelCha	JANEZZ010000386__1	4521249	anchor		TOGA2 projected no ANC in HelCha; this locus sits at ANC's position on the exendin contig and groups with HelSus_ANC (100/100)
 HelSus	chr2	189564066	label	EX2	provisional; 2d should return 'encodes published EXENDIN2 exactly' (100% to EU790960 cDNA over all 3 exons)
@@ -10,3 +11,4 @@ ElgCoe	ptg001112l	360492	drop		5.3 subs/site branch in the first codon tree; che
 LanBor	JBQWDX010000034__1	8064426	keep		internal stop is in the C-terminal propeptide, past the hormone domain and both dibasic sites; the peptide region is intact
 DopGra	CM125129__1	21650086	drop		projection yields no hormone domain (0 domains, 23% to anything); broken model
 HelCha	JANEZZ010000386__1	4391184	label	EX3	confirmed: encodes published exendin-3 exactly
+HelCha	JANEZZ010000386__1	4391184	replace	rescued/HelCha_A129_EX3	TOGA2 had only reference isoform mRNA-2, whose 419 bp first exon has no protein evidence; rebuilt from AJ580309 by 2e_rescue_locus.py, giving 87 aa identical to published exendin-3 (P20394)
