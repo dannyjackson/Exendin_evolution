@@ -53,6 +53,14 @@ def residue_at(qseq, sseq, qstart, target):
     return ""
 
 
+def compatible(h, x):
+    """Can these two hits be exons of one gene? Hits from different queries always can."""
+    if h["q"] != x["q"]:
+        return True
+    # hits arrive sorted by genomic position, so h is downstream of x
+    return h["qs"] > x["qe"] if h["strand"] == "+" else h["qe"] < x["qs"]
+
+
 def read_fasta(path):
     out, name, buf = [], None, []
     for line in open(path):
@@ -135,11 +143,12 @@ def main():
     if not hits:
         print("[info] no hits passed the filters", file=sys.stderr)
 
-    # Group hits into loci. Two hits belong to the same gene only if they are on the
-    # same strand, close enough, and cover DIFFERENT parts of the query: exons of one
-    # precursor tile the query, whereas two tandem copies both match the same part of
-    # it. Distance alone cannot tell those apart - a gene can span 6 kb while the next
-    # copy starts 3 kb later.
+    # Group hits into loci. Several different queries matching the same place are one
+    # locus. But two hits FROM THE SAME QUERY belong to the same gene only if they are
+    # collinear - a later genomic position must match a later part of that query, as
+    # exons of one precursor do. Two tandem copies instead match the same part of the
+    # query, which is how they are told apart. Distance alone cannot do it: a gene can
+    # span 6 kb while the next copy starts 3 kb later.
     gap = a.cluster_kb * 1000
     hits.sort(key=lambda h: h["lo"])
     loci = []
@@ -149,8 +158,8 @@ def main():
                 break
             if L[0]["strand"] != h["strand"]:
                 continue
-            if any(h["qs"] <= x["qe"] and h["qe"] >= x["qs"] for x in L):
-                continue                      # same part of the query -> another copy
+            if not all(compatible(h, x) for x in L):
+                continue                      # same query, same part -> another copy
             L.append(h)
             break
         else:
