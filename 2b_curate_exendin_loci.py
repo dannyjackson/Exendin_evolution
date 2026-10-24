@@ -81,7 +81,11 @@ def read_curation(path):
             cur[(f[0], f[1], int(f[2]))].append((f[3], f[4] if len(f) > 4 else "", f[5] if len(f) > 5 else ""))
     return cur
 
-
+def isoform(projection):
+    """mRNA number, so the first (canonical) isoform wins ties."""
+    m = re.search(r"-mRNA-(\d+)", projection)
+    return int(m.group(1)) if m else 99
+    
 def mid(x):
     return (int(x["q_start"]) + int(x["q_end"])) / 2
 
@@ -178,18 +182,22 @@ def main():
         used.add(name)
 
         want = {a.anchor} | exn if f["kind"] == "anchor" else exn
-        cands = sorted((p for p in f["here"] if p["ref_gene"] in want and (q, p["projection"]) in seqs),
-                       key=lambda p: (p["ref_gene"] != a.anchor, RANK.get(p["status"], 99), -int(p["cds_bp"] or 0)))
+        cands = sorted((p for p in f["here"] if p["ref_gene"] in want),
+                       key=lambda p: (p["ref_gene"] != a.anchor, (q, p["projection"]) not in seqs,
+                                      RANK.get(p["status"], 99), isoform(p["projection"]),
+                                      -int(p["cds_bp"] or 0)))
         best = cands[0] if cands else None
-        nt = seqs[(q, best["projection"])] if best else ""
+        nt = seqs.get((q, best["projection"]), "") if best else ""
         aa = translate(nt)
         if aa.endswith("*"):
             nt, aa = nt[:-3], aa[:-1]
 
         why = []
         if not best:
-            why.append("no_sequence")
+            why.append("no_projection")
         else:
+            if not nt:
+                why.append("no_sequence")
             if best["status"] not in allowed:
                 why.append(f"status_{best['status']}")
             if len(nt) % 3:
