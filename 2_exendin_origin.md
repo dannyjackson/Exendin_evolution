@@ -1,8 +1,8 @@
 # What are the "exendins"? Curated proteins, published names, and a rooted gene tree
 
 **Question:** the name *exendin* was applied to proteins prior to understanding their genomic 
-and phylogenetic context. Some proteins were collected from Heloderma horridium samples that
-predated the split of this species into four distinct lineages: **Mexican Beaded Lizard** 
+and phylogenetic context. Some proteins were collected from *Heloderma horridium* samples that
+predated the split of this lineage into four distinct species: **Mexican Beaded Lizard** 
 (*Heloderma horridum*), **Chiapan Beaded Lizard** (*Heloderma alvarezi*), **Guatemalan Beaded Lizard**,
 (*Heloderma charlesbogerti*), and **Río Fuerte Beaded Lizard** (*Heloderma exasperatum*). 
 These proteins were all purified and named based on distinct protein coding sequences, but

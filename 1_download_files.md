@@ -57,3 +57,54 @@ Readme:
 Script for downloading:
 https://github.com/dannyjackson/Exendin_evolution/blob/main/1_download_files.md
 ```
+
+## Reference genomes (for model rescue and annotation-evidence checks)
+***downloaded on October 24th, 2026***
+
+Needed by `2_exendin_origin.md` step 3: the HelCha genome to rebuild the exendin-3 model,
+the HelSus genome and both annotations (EviAnn and NCBI RefSeq) to show why the reference
+isoform used by TOGA2 is mis-annotated. Both NCBI assemblies are of the same material as
+the TOGA2 runs, so coordinates transfer: `GCF_057233095.1` is the Wilson-lab HelSus
+(isolate Gila_16-S) and `GCA_026122225.1` is the HelCha JANEZZ assembly TOGA2 used.
+
+```
+GENOMEDIR=/data/Wilson_Lab/data/Exendin_Evolution/genomes
+mkdir -p ${GENOMEDIR} && cd ${GENOMEDIR}
+
+# HelCha — JANEZZ contigs, same names as the TOGA2 query
+datasets download genome accession GCA_026122225.1 --include genome,gff3,seq-report \
+    --filename HelCha_GCA_026122225.1.zip
+unzip -o -q HelCha_GCA_026122225.1.zip -d HelCha_GCA_026122225.1
+
+# HelSus — RefSeq chromosomes (NC_139459.1 = chr2) plus NCBI's own annotation
+datasets download genome accession GCF_057233095.1 --include genome,gff3,seq-report \
+    --filename HelSus_GCF_057233095.1.zip
+unzip -o -q HelSus_GCF_057233095.1.zip -d HelSus_GCF_057233095.1
+
+for A in HelCha_GCA_026122225.1 HelSus_GCF_057233095.1; do
+  samtools faidx $(ls ${A}/ncbi_dataset/data/*/*_genomic.fna)
+done
+
+# confirm NCBI and TOGA2 coordinates agree: this must be exendin-4 exon 1
+HELSUS_FASTA=${GENOMEDIR}/HelSus_GCF_057233095.1/ncbi_dataset/data/GCF_057233095.1/GCF_057233095.1_16-S_ref_genomic.fna
+samtools faidx ${HELSUS_FASTA} NC_139459.1:189613335-189613421   # ATGAAAATCATCCTGTGG...
+```
+
+## Published exendin cDNAs
+Used as trusted queries for `2e_rescue_locus.py` and as the reference peptides in
+`2_reference_peptides.fa`.
+
+| Accession | What it is |
+|---|---|
+| AJ580309.1 | *H. horridum* (sensu lato, 1990) exendin-3 mRNA |
+| U77613.1 | *H. suspectum* exendin-4 mRNA |
+| EU790960.1 | *H. suspectum cinctum* exendin-2 mRNA |
+
+```
+cd ${PROJDIR}/datasets/query_fastas/nucleotide
+for ACC in AJ580309.1 U77613.1 EU790960.1; do
+  efetch -db nuccore -id ${ACC} -format fasta > ${ACC%%.*}.fa
+done
+```
+If EDirect is unavailable, download them from NCBI Nucleotide by hand; `AJ580309.fa` is the
+one `2e_rescue_locus.py` needs.
