@@ -79,8 +79,9 @@ def main():
     ap.add_argument("--evalue", default="1e-3")
     ap.add_argument("--min-identity", type=float, default=35.0)
     ap.add_argument("--min-length", type=int, default=15)
-    ap.add_argument("--cluster-kb", type=float, default=3.0,
-                    help="hits within this distance are treated as one locus")
+    ap.add_argument("--cluster-kb", type=float, default=10.0,
+                    help="maximum gap between hits of one gene; hits whose QUERY ranges "
+                         "overlap are always split, so tandem copies stay separate")
     ap.add_argument("--default-domain-start", type=int, default=45,
                     help="used for a query with no recognisable hormone-domain motif")
     a = ap.parse_args()
@@ -134,14 +135,29 @@ def main():
     if not hits:
         print("[info] no hits passed the filters", file=sys.stderr)
 
+    # Group hits into loci. Two hits belong to the same gene only if they are on the
+    # same strand, close enough, and cover DIFFERENT parts of the query: exons of one
+    # precursor tile the query, whereas two tandem copies both match the same part of
+    # it. Distance alone cannot tell those apart - a gene can span 6 kb while the next
+    # copy starts 3 kb later.
+    gap = a.cluster_kb * 1000
     hits.sort(key=lambda h: h["lo"])
-    loci, cur = [], []
+    loci = []
     for h in hits:
-        if cur and h["lo"] - cur[-1]["hi"] > a.cluster_kb * 1000:
-            loci.append(cur); cur = []
-        cur.append(h)
-    if cur:
-        loci.append(cur)
+        for L in reversed(loci):
+            if h["lo"] - max(x["hi"] for x in L) > gap:
+                break
+            if L[0]["strand"] != h["strand"]:
+                continue
+            if any(h["qs"] <= x["qe"] and h["qe"] >= x["qs"] for x in L):
+                continue                      # same part of the query -> another copy
+            L.append(h)
+            break
+        else:
+            loci.append([h])
+            continue
+        if not any(h is x for L in loci for x in L):
+            loci.append([h])
 
     with open(a.out_prefix + "_hits.tsv", "w") as fh:
         fh.write("locus\tquery\tq_start\tq_end\tg_start\tg_end\tstrand\tpart\tpident\t"
@@ -156,8 +172,19 @@ def main():
     for i, L in enumerate(loci, 1):
         parts = {h["part"] for h in L}
         best = max(L, key=lambda h: h["bits"])
-        stops = sum(h["stops"] for h in L)
-        bad_start = [h["first"] for h in L if h["first"] and h["first"] not in "HY"]
+        # count stops only in the best hit: a poorly matching secondary query can align
+        # through a stop codon in the wrong frame and mark an intact gene as a pseudogene
+        stops = best["stops"]
+        stops_any = sum(h["stops"] for h in L)
+        # judge the domain start from the single best hit that covers it, not from every
+        # hit: a weak secondary query can align its domain start anywhere
+        dom_hits = [h for h in L if h["first"]]
+        bad_start, start_q = [], ""
+        if dom_hits:
+            b = max(dom_hits, key=lambda h: h["bits"])
+            start_q = f"{b['first']}@{b['q']}"
+            if b["first"] not in "HY":
+                bad_start = [b["first"]]
         if {"N_term", "hormone_domain"} <= parts or "spans" in parts:
             state = "candidate_gene"
         elif parts == {"hormone_domain"}:
@@ -167,18 +194,20 @@ def main():
         if stops:
             state += ";premature_stop"
         if bad_start:
-            state += f";domain_starts_{'/'.join(sorted(set(bad_start)))}"
-        rows.append([i, best["lo"], max(h["hi"] for h in L), best["strand"], len(L),
-                     "+".join(sorted(parts)), state, best["q"], f"{best['pid']:.1f}", stops])
+            state += f";domain_starts_{bad_start[0]}"
+        rows.append([i, min(h["lo"] for h in L), max(h["hi"] for h in L), best["strand"],
+                     len(L), "+".join(sorted(parts)), state, best["q"],
+                     f"{best['pid']:.1f}", stops, stops_any, start_q])
 
     with open(a.out_prefix + "_loci.tsv", "w") as fh:
-        fh.write("locus\tg_start\tg_end\tstrand\tn_hits\tparts\tstate\tbest_query\tbest_pident\tstops\n")
+        fh.write("locus\tg_start\tg_end\tstrand\tn_hits\tparts\tstate\tbest_query\t"
+                 "best_pident\tstops\tstops_any_hit\tdomain_start\n")
         for r in rows:
             fh.write("\t".join(map(str, r)) + "\n")
 
     print(f"[info] {len(hits)} hits in {len(loci)} loci", file=sys.stderr)
-    print("locus\tg_start\tg_end\tstrand\tn_hits\tparts\tstate\tbest_query\tbest_pident\tstops",
-          file=sys.stderr)
+    print("locus\tg_start\tg_end\tstrand\tn_hits\tparts\tstate\tbest_query\tbest_pident\t"
+          "stops\tstops_any\tdomain_start", file=sys.stderr)
     for r in rows:
         print("\t".join(map(str, r)), file=sys.stderr)
 
