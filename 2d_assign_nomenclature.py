@@ -143,7 +143,10 @@ def main():
             for m in MOTIF.finditer(full):       # non-overlapping hormone domains
                 if m.start() >= last + 20:
                     ndom += 1; last = m.start()
-            scored = sorted(((compare(pep, r)[0], compare(pep, r)[1], n) for n, r in refs), reverse=True)
+            def best_of(r):
+                # an unprocessed C-terminal extension should not count as mismatch
+                return max(compare(pep, r), compare(pep[:len(r)], r), key=lambda x: x[0])
+            scored = sorted(((best_of(r)[0], best_of(r)[1], n) for n, r in refs), reverse=True)
             (id1, d1, n1), (id2, _, n2) = scored[0], scored[1]
             base = n1.replace("_mature", "")
             if id1 >= a.exact:
