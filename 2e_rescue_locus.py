@@ -100,8 +100,9 @@ def main():
     cols = "pident length qstart qend sstart send evalue bitscore"
     cmd = [prog, "-query", a.query, "-subject", target, "-outfmt", f"6 {cols}",
            "-evalue", a.evalue]
-    if not a.protein:
-        cmd += ["-task", "blastn"]
+    # match 2f_scan_interval.py: low-complexity filtering suppresses the short hits
+    # that single exons of these small precursors produce
+    cmd += ["-seg", "no"] if a.protein else ["-task", "blastn"]
     hits = []
     for line in run(cmd).splitlines():
         f = line.split("\t")
