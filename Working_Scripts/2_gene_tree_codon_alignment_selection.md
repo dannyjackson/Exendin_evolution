@@ -10,7 +10,7 @@ Steps:
 7. selection 
 8. ancestral sequences
 
-Reference genes:
+Reference genes (from HelSus):
 
 | ID | What it is |
 |---|---|
@@ -22,6 +22,8 @@ Reference genes:
 
 ## Set up environment
 ```
+sinteractive --cpus-per-task=8 --mem=16g --time=8:00:00
+
 source myconda
 mamba activate exendin_env
 
@@ -32,24 +34,23 @@ SCRIPTDIR=${PROJDIR}/scripts/Exendin_evolution
 
 cd ${SCRIPTDIR}
 git pull
-cd ${PROJDIR}
-
-sinteractive --cpus-per-task=8 --mem=16g --time=8:00:00
 
 OUT=${PROJDIR}/analyses/toga2
 IQTREE=$(command -v iqtree3 || command -v iqtree2 || command -v iqtree)
+
+cd ${OUT}
 ```
 
 ## 1. Collect projections (one row per projection, one per query locus, FASTA)
 ```
+
 python3 ${SCRIPTDIR}/2a_collect_exendin_projections.py \
     --run ${TOGADIR}/target_HelSus \
     --genes LOC_00012324,LOC_00012325,LOC_00001483,LOC_00000122 \
     --anchor LOC_00012323 \
     --outdir ${OUT}/collect_HelSus 2> ${OUT}/collect_HelSus.log
 
-# Any "[warn] ... cannot tell which is the query" means TOGA2 stores reference and
-# query records under the same ID; look at the headers and tell me the format.
+# check for warnings and confirm sensical output
 cat ${OUT}/collect_HelSus.log
 zcat ${TOGADIR}/target_HelSus/query_ShiCro/nucleotide.fa.gz | grep '>' | head -4
 ```

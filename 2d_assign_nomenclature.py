@@ -29,7 +29,7 @@ import argparse, re, sys
 
 MOTIF = re.compile(r"[HY][ASG][DEQ][AGP][ATVIGSM]F[TSI]")
 CLEAV = re.compile(r"(KR|RR|KK|R|K)")
-
+DIBASIC = re.compile(r"(KR|RR|KK)")
 
 def read_fasta(path):
     out, name, buf = [], None, []
@@ -83,12 +83,16 @@ def compare(query, ref):
             diffs.append(f"{y if y != '-' else '-'}{pos}{x if x != '-' else '-'}")
     return 100.0 * same / cols if cols else 0.0, diffs
 
+def trim(pep, minlen):
+    """Cut the peptide at the first downstream dibasic processing site, if any."""
+    m = DIBASIC.search(pep, minlen)
+    return pep[:m.start()] if m else pep
 
 def mature(seq, panel, minlen=24):
     """(peptide, how_it_was_found)"""
     m = MOTIF.search(seq)
     if m and len(seq) - m.start() >= minlen:
-        return seq[m.start():], "motif"
+        return trim(seq[m.start():], minlen), "motif"
     best = None
     for c in CLEAV.finditer(seq):
         s = c.end()
@@ -107,8 +111,8 @@ def mature(seq, panel, minlen=24):
     # a real precursor is cut at a basic site, so keep a cleavage start unless a
     # free window beats it clearly
     if best and (win is None or best[0] >= win[0] - 5):
-        return seq[best[1]:], "cleavage_site"
-    return (seq[win[1]:], "best_window") if win else (seq, "whole_sequence")
+        return trim(seq[best[1]:], minlen), "cleavage_site"
+    return (trim(seq[win[1]:], minlen), "best_window") if win else (seq, "whole_sequence")
 
 
 def main():
@@ -128,12 +132,17 @@ def main():
 
     with open(a.out_prefix + "_assignments.tsv", "w") as out, \
          open(a.out_prefix + "_identity.tsv", "w") as mat:
-        out.write("gene\tmature_peptide\tpeptide_len\thow_found\tbest_match\tidentity\t"
+        out.write("gene\tmature_peptide\tpeptide_len\tn_hormone_domains\thow_found\tbest_match\tidentity\t"
                   "differences\tsecond_match\tsecond_identity\tverdict\tbest_match_provenance\n")
         mat.write("gene\t" + "\t".join(n for n, _ in refs) + "\n")
         for h, seq in queries:
             gene = h.split()[0]
-            pep, how = mature(seq.upper(), refs)
+            full = seq.upper()
+            pep, how = mature(full, refs)
+            ndom, last = 0, -99
+            for m in MOTIF.finditer(full):       # non-overlapping hormone domains
+                if m.start() >= last + 20:
+                    ndom += 1; last = m.start()
             scored = sorted(((compare(pep, r)[0], compare(pep, r)[1], n) for n, r in refs), reverse=True)
             (id1, d1, n1), (id2, _, n2) = scored[0], scored[1]
             base = n1.replace("_mature", "")
@@ -143,7 +152,7 @@ def main():
                 verdict = f"{base}-type, {len(d1)} difference(s) from the published peptide"
             else:
                 verdict = f"no published match (closest {base}, {id1:.0f}%)"
-            out.write(f"{gene}\t{pep}\t{len(pep)}\t{how}\t{n1}\t{id1:.1f}\t{','.join(d1) if d1 else '-'}\t"
+            out.write(f"{gene}\t{pep}\t{len(pep)}\t{ndom}\t{how}\t{n1}\t{id1:.1f}\t..."
                       f"{n2}\t{id2:.1f}\t{verdict}\t{meta[n1]}\n")
             mat.write(gene + "\t" + "\t".join(f"{compare(pep, r)[0]:.1f}" for _, r in refs) + "\n")
     print(f"[info] {len(queries)} genes compared with {len(refs)} published peptides", file=sys.stderr)

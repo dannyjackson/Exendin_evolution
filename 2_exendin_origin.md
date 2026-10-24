@@ -1,24 +1,39 @@
 # What are the "exendins"? Curated proteins, published names, and a rooted gene tree
 
-**Question:** the name *exendin* is used for three different things. This stage works out
-which gene each sense refers to.
+**Question:** the name *exendin* was applied to proteins prior to understanding their genomic 
+and phylogenetic context. Some proteins were collected from Heloderma horridium samples that
+predated the split of this species into four distinct lineages: **Mexican Beaded Lizard** 
+(*Heloderma horridum*), **Chiapan Beaded Lizard** (*Heloderma alvarezi*), **Guatemalan Beaded Lizard**,
+(*Heloderma charlesbogerti*), and **Río Fuerte Beaded Lizard** (*Heloderma exasperatum*). 
+These proteins were all purified and named based on distinct protein coding sequences, but
+could easily be orthologs from distinct populations and species, or could be paralogous genes
+within the same species, or (most likely) could be a mix of both options.
 
-| Sense of "exendin" | Where it comes from | What it actually denotes |
+Additionally, reference genomes have applied diverse nomenclatures to a gene that appears to
+be orthologous to the ancestral exendin gene in preliminary analyses. It is sometimes named
+exendin-2 like, exendin-3 like, pro-glucagon (zebra finch), and glucagon-like.
+
+Before embarking on an analysis of the exendin gene family, I will first work out a naming system
+to keep track of genes across this complex and messy nomenclature system
+
+| Use of "exendin" | Where it comes from | What it actually denotes |
 |---|---|---|
 | exendin-1, -2, -3, -4 | peptides purified from *Heloderma* venom, 1984–1992 | **mature peptide sequences**, named before any genome existed. Nothing in the names refers to a locus |
-| "exendin-like", "exendin-3-like" | NCBI / liftoff automatic annotation | **sequence similarity only**, not an orthology claim |
+| "exendin-like", "exendin-3-like" | NCBI annotations | **sequence similarity only**, not an orthology claim |
 | the ancestral exendin gene | Irwin 2012; = **GCGL** of Wang et al. 2012 | a **single-copy gene** found in birds, reptiles, amphibians and fish, with its own receptor (GCGLR), apparently absent from mammals |
 
-**Working hypothesis to test here:** the third sense is our `ANC` gene (`LOC_00012323`),
-1:1 in all 14 genomes, in the conserved **SLC4A8 – ANC – AQP5** interval, and the same
-gene as the zebra finch locus annotated "pro-glucagon". The *Heloderma* venom exendins
-are tandem duplicates beside it. (Supporting circumstantial evidence from the first-pass
-GFF notes: *Elgaria* carries a `GCGR-like` receptor between CLUAP1 and ANKS3, which is
-where GCGLR would sit — a receptor for this ligand lineage, not for glucagon.)
+**Working hypothesis to test here:** the third sense is gene (`LOC_00012323`, tentatively 
+referred to as "ANC" until we properly identify it), has 1:1 orthologs in all 14 genomes, 
+all in the conserved **SLC4A8 – ANC – AQP5** interval, and is the same gene as the zebra 
+finch locus annotated "pro-glucagon". The *Heloderma* venom exendins are tandem duplicates 
+beside it. (Supporting circumstantial evidence from the first-pass GFF notes: *Elgaria* 
+carries a `GCGR-like` receptor between CLUAP1 and ANKS3, which is where GCGLR would sit 
+— a receptor for this ligand lineage, not for glucagon.)
 
-**Approach:** collect every copy in that interval across the 14 genomes with TOGA2,
-curate one protein per copy, **assign each one to the published nomenclature by
-mature-peptide sequence**, then build a protein tree rooted on the zebra finch ortholog.
+**Approach:** collect every copy in the conserved **SLC4A8 – ANC – AQP5** interval 
+cross the 14 squamate genomes annotated with TOGA2, curate one protein per copy, 
+**assign each one to the published nomenclature by mature-peptide sequence**, then 
+build a protein tree rooted on the zebra finch ortholog.
 
 **Copy names** give the position relative to ANC: `HelSus_A076` = 76 kb from ANC on the
 AQP5 side; `S` = SLC4A8 side; `U` = not on ANC's contig. Curation labels are appended
@@ -27,6 +42,8 @@ what each gene should be called.
 
 ## Set up environment
 ```
+sinteractive --cpus-per-task=8 --mem=16g --time=4:00:00
+
 source myconda
 mamba activate exendin_env
 
@@ -36,8 +53,6 @@ SCRIPTDIR=${PROJDIR}/scripts/Exendin_evolution
 
 cd ${SCRIPTDIR}
 git pull
-
-sinteractive --cpus-per-task=8 --mem=16g --time=4:00:00
 
 OUT=${PROJDIR}/analyses/exendin_origin
 mkdir -p ${OUT} && cd ${OUT}
@@ -101,15 +116,21 @@ will come back as "no published match". That is expected: ANC's published name i
 not an exendin number, and no GCGL peptide sequence is in the panel. Add one to
 `2_reference_peptides.fa` if you obtain it.
 
-## 4. Outgroup: zebra finch ANC ortholog
-The zebra finch gene between AQP5 and SLC4A8 (NCBI name "pro-glucagon"; expected to be
-GCGL). Confirm it has **one** hormone domain, not proglucagon's three, before using it.
+## 4. Outgroup: zebra finch GCGL
+The zebra finch gene between AQP5 and SLC4A8, annotated by NCBI as "pro-glucagon".
+Confirmed as GCGL: a single hormone domain of exactly 29 aa before its dibasic cleavage
+site, 66% identical to glucagon — matching the "cGCGL1–29 ... 62–66% identity with GCG"
+of Wang et al. 2012. Re-run the check below if you change the accession.
 ```
-ZEFI=XP_XXXXXXXXX.X      # its RefSeq protein accession
+ZEFI=XP_004175947.5      # its RefSeq protein accession
 
 datasets download gene accession ${ZEFI} --include protein --filename zefi.zip
 unzip -o -q zefi.zip -d zefi
-seqkit seq -w 0 zefi/ncbi_dataset/data/protein.faa | sed '1s/^>.*/>TaeGut_ANC/' > outgroup.faa
+# keep ONE record: NCBI often returns several identical isoforms, and duplicate
+# tips break the tree step
+seqkit seq -w 0 zefi/ncbi_dataset/data/protein.faa | seqkit head -n 1 \
+  | sed '1s/^>.*/>TaeGut_GCGL/' > outgroup.faa
+grep -c '>' outgroup.faa     # must be 1
 cat outgroup.faa
 
 # how many hormone domains? one = ANC/GCGL-type; three = real proglucagon
