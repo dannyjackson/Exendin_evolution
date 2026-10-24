@@ -1,11 +1,16 @@
 # Exendin gene tree, codon alignment and selection (TOGA2, HelSus reference)
 
-Builds on `2a_collect_exendin_projections.py`. Steps:
-1. collect projections → 2. one CDS per locus → 3. check the loci by hand →
-4. codon alignment → 5. gene tree and duplication-timing test →
-6. recombination / gene conversion → 7. selection → 8. ancestral sequences
+Steps:
+1. collect projections 
+2. one CDS per locus 
+3. check the loci by hand
+4. codon alignment 
+5. gene tree and duplication-timing test
+6. recombination / gene conversion
+7. selection 
+8. ancestral sequences
 
-Reference genes (collaborator's curated HelSus annotation):
+Reference genes:
 
 | ID | What it is |
 |---|---|
@@ -131,6 +136,19 @@ $IQTREE -s ../aln/exendin_plus_anchor.codon.fa -st CODON -m MFP \
 # protein tree as a cross-check
 $IQTREE -s ../aln/exendin_plus_anchor.aa.fa -m MFP \
         -B 1000 -alrt 1000 -o ${ANC} -T AUTO --prefix exendin_anchor.aa
+
+# draw it
+for T in exendin_anchor.codon exendin_anchor.aa; do
+  python3 ${SCRIPTDIR}/2e_draw_tree_svg.py --tree ${T}.treefile \
+      --title "Exendin array + anchor (${T})" > ${T}.svg
+done
+
+for T in exendin_anchor.codon exendin_anchor.aa; do
+  python3 ${SCRIPTDIR}/2e_draw_tree_svg.py --tree ${T}.treefile \
+      --title "Exendin array + anchor (${T})" > ${T}.png
+done
+
+
 ```
 **Duplication-timing test.** H1: the *Heloderma* copies arose by lineage-specific
 duplication, so all *Heloderma* exendins form one clade. The alternative: copies predate

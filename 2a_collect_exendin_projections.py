@@ -6,12 +6,12 @@ reference run, and summarise them per projection and per query locus.
 Read-only on the TOGA2 directory. Writes only to --outdir (default: stdout for
 the projection table; locus table and FASTA only if --outdir is given).
 
-Usage
-  python3 collect_exendin_projections.py \
+Usage (see 2_exendin_origin.md)
+  python3 2a_collect_exendin_projections.py \
       --run ${TOGADIR}/target_HelSus \
-      --genes LOC_00012323,LOC_00012324,LOC_00012325 \
+      --genes LOC_00012324,LOC_00012325,LOC_00012326 \
       --anchor LOC_00012323 \
-      [--outdir ${PROJDIR}/toga2_exendin] [--fasta-status FI,I,PI]
+      --outdir collect
 
 Outputs (with --outdir)
   projections.tsv  one row per projection (query x reference transcript x chain)

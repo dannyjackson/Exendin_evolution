@@ -1,0 +1,10 @@
+# Curation decisions for 2b_curate_exendin_loci.py (tab-separated).
+# Loci are identified by query, contig and locus start exactly as in collect/loci.tsv.
+# action: anchor = use as ANC | drop = leave out of the tree | label = append _<value> to the name
+query	q_chrom	q_start	action	value	note
+HelCha	JANEZZ010000386__1	4521249	anchor		TOGA2 projected no ANC in HelCha; this locus sits at ANC's position on the exendin contig and groups with HelSus_ANC (100/100)
+HelSus	chr2	189564066	label	EX2	provisional; 2d should return 'encodes published EXENDIN2 exactly' (100% to EU790960 cDNA over all 3 exons)
+HelSus	chr2	189613335	label	EX4	provisional; 2d should return 'encodes published EXENDIN4 exactly' (100% to U77613 cDNA over all 3 exons)
+HelCha	JANEZZ010000386__1	4446077	label	EX1	provisional; its protein matches published exendin-1 exactly, and it pairs with HelSus exendin-2 in the tree
+# HelCha	JANEZZ010000386__1	4391184	label	EX3	pairs with HelSus exendin-4 (100/100); uncomment if 2d returns 'encodes published EXENDIN3 exactly'
+ElgCoe	ptg001112l	360492	drop		5.3 subs/site branch in the first codon tree; check its alignment before putting it back
