@@ -1,59 +1,110 @@
-# Download files
-Run the set-up block of `0_Environment_management.md` first.
+# Download files for analysis of exendins
 
-## TOGA2 annotations
-**Already downloaded on 2026-10-23.** Copy this section unchanged from
-`1_download_files.md` ("## TOGA2" and its Readme) of
-[Exendin_evolution](https://github.com/dannyjackson/Exendin_evolution). It fetches
-Elise Lauterbur's TOGA2 run with rclone into `${TOGADIR}` (25 GB, UCSC browser and Nextflow
-files excluded). Steps 3 and 4 use only `${TOGADIR}/target_HelSus`.
+## TOGA2 
+***downloaded on October 23rd, 2026***
+```
+ssh -L 53682:localhost:53682 helix.nih.gov
 
-The HelSus EviAnn annotation that TOGA2 projected is also needed (step 3); it is the file
-the old repo used:
+module load rclone
+
+rclone config
+
+
+rclone lsd gdrive: --drive-shared-with-me 
+
+# Top-level contents (should show integrated_annotations, query_*, target_*)
+rclone lsd gdrive: --drive-root-folder-id 1PqZeWAav5iu-Baj7kkXPoPnYT30n29ug
+
+# Full recursive listing with sizes
+rclone lsf -R --format "ps" --drive-root-folder-id 1PqZeWAav5iu-Baj7kkXPoPnYT30n29ug gdrive: > toga2_listing.txt
+wc -l toga2_listing.txt
+head toga2_listing.txt
+
+# pull all files, excluding the genome browser files and the Nextflow working files
+module load rclone
+
+cat > ~/toga2_filters.txt << 'EOF'
+- **/ucsc_browser_files/**
+- **/nextflow/**
+- .command.*
+- .exitcode
++ **
+EOF
+
+# Check the size first; it should be about 26-27 GB
+rclone size gdrive: --drive-root-folder-id 1PqZeWAav5iu-Baj7kkXPoPnYT30n29ug \
+  --filter-from ~/toga2_filters.txt
+
+# Then copy, inside tmux so it survives a disconnect
+tmux new -s toga2
+rclone copy gdrive: /data/Wilson_Lab/projects/squamates/Arizona_squamates/misc/Toxicofera_TOGA2_annotations/ \
+  --drive-root-folder-id 1PqZeWAav5iu-Baj7kkXPoPnYT30n29ug \
+  --filter-from ~/toga2_filters.txt \
+  --progress --transfers 8 --checkers 16
 ```
-HELSUS_EVIANN_GFF=${PROJDIR}/datasets/genomes/Heloderma_suspectum/Heloderma_suspectum.final.reference.gff3
-ls -l ${HELSUS_EVIANN_GFF}
+Readme:
+```
+# TOGA2 annotations (Toxicofera / Anguimorpha)
+
+- **Downloaded:** 2026-10-23, on helix.nih.gov
+- **Source:** Google Drive folder shared by Elise Lauterbur, who ran the analysis
+  https://drive.google.com/drive/folders/1PqZeWAav5iu-Baj7kkXPoPnYT30n29ug
+- **Destination:** `/data/Wilson_Lab/projects/squamates/Arizona_squamates/misc/Toxicofera_TOGA2_annotations/`
+- **Size:** 25G
+- **Excluded:** UCSC browser files (`ucsc_browser_files/`, ~11.5 GB) and Nextflow
+  working files (`nextflow/`, `.command.*`, `.exitcode`): not needed for analysis
+
+Script for downloading:
+https://github.com/dannyjackson/Exendin_evolution/blob/main/1_download_files.md
 ```
 
-## Species table
-One row per taxon: every tip of the Cactus tree, every TOGA2 query, and any outgroup you add
-with `--extra`. Accessions come from `1_species_pinned.tsv` where listed, otherwise from NCBI
-(RefSeq annotated > annotated > reference > best contig N50). Every NCBI candidate is
-listed in `species_candidates.tsv`.
-```
-cd ${WORK}
-python3 ${SCRIPTDIR}/1a_make_species_table.py \
-    --tree ${SPTREE} \
-    --toga2-run ${TOGADIR}/target_HelSus \
-    --pinned ${SCRIPTDIR}/1_species_pinned.tsv \
-    --out species.tsv --candidates species_candidates.tsv 2> species.log
-cat species.log
-```
-Check:
-- **Warnings about TOGA2 queries that are not pinned.** For those species the NCBI choice
-  may not be the assembly TOGA2 ran on, so contig names will differ between the step-2 and
-  step-3 figures. Look up the assembly each TOGA2 query used, and add a row for it to
-  `1_species_pinned.tsv` (and commit it), then re-run.
-- **Tree tips that are not `Genus_species`** are skipped unless pinned. A pinned row also
-  supplies the species name.
-- **Rows with `NA`** have no NCBI assembly. They stay in the table, so the plots show them
-  as empty rows instead of leaving them out without saying so.
-- To add outgroups such as zebra finch (whose GCGL gene sits between AQP5 and SLC4A8), use
-  `--extra Taeniopygia_guttata,Gallus_gallus`. They are drawn below the tree.
+## Reference genomes (for model rescue and annotation-evidence checks)
+***downloaded on October 24th, 2026***
 
-`species.tsv` is the single list every later step reads. Edit it by hand if a choice is
-wrong.
+Needed by `2_exendin_origin.md` step 3: the HelCha genome to rebuild the exendin-3 model,
+the HelSus genome and both annotations (EviAnn and NCBI RefSeq) to show why the reference
+isoform used by TOGA2 is mis-annotated. Both NCBI assemblies are of the same material as
+the TOGA2 runs, so coordinates transfer: `GCF_057233095.1` is the Wilson-lab HelSus
+(isolate Gila_16-S) and `GCA_026122225.1` is the HelCha JANEZZ assembly TOGA2 used.
 
-## Genomes, annotations and proteins
 ```
-bash ${SCRIPTDIR}/1b_download_genomes.sh species.tsv 2>&1 | tee download.log
-```
-This downloads `genome,gff3,protein,seq-report` per accession into
-`${GENOMEDIR}/<code>_<accession>/`, the layout the old `3a_scan_species.sh` used. So
-genomes the old repo already fetched (`HelSus_GCF_057233095.1`, `HelCha_GCA_026122225.1`,
-`AnoCar_...` etc.) are reused, and only a missing GFF or protein file is fetched. The
-summary at the end lists which species have an NCBI annotation. Unannotated assemblies
-(e.g. HelCha) are drawn as "no NCBI annotation" in step 2, and still searched in step 4.
+GENOMEDIR=/data/Wilson_Lab/data/Exendin_Evolution/genomes
+mkdir -p ${GENOMEDIR} && cd ${GENOMEDIR}
 
-On Biowulf, run it inside `tmux` or an `sinteractive` session: a dozen squamate genomes is
-tens of GB.
+# HelCha — JANEZZ contigs, same names as the TOGA2 query
+datasets download genome accession GCA_026122225.1 --include genome,gff3,seq-report \
+    --filename HelCha_GCA_026122225.1.zip
+unzip -o -q HelCha_GCA_026122225.1.zip -d HelCha_GCA_026122225.1
+
+# HelSus — RefSeq chromosomes (NC_139459.1 = chr2) plus NCBI's own annotation
+datasets download genome accession GCF_057233095.1 --include genome,gff3,seq-report \
+    --filename HelSus_GCF_057233095.1.zip
+unzip -o -q HelSus_GCF_057233095.1.zip -d HelSus_GCF_057233095.1
+
+for A in HelCha_GCA_026122225.1 HelSus_GCF_057233095.1; do
+  samtools faidx $(ls ${A}/ncbi_dataset/data/*/*_genomic.fna)
+done
+
+# confirm NCBI and TOGA2 coordinates agree: this must be exendin-4 exon 1
+HELSUS_FASTA=${GENOMEDIR}/HelSus_GCF_057233095.1/ncbi_dataset/data/GCF_057233095.1/GCF_057233095.1_16-S_ref_genomic.fna
+samtools faidx ${HELSUS_FASTA} NC_139459.1:189613335-189613421   # ATGAAAATCATCCTGTGG...
+```
+
+## Published exendin cDNAs
+Used as trusted queries for `2e_rescue_locus.py` and as the reference peptides in
+`2_reference_peptides.fa`.
+
+| Accession | What it is |
+|---|---|
+| AJ580309.1 | *H. horridum* (sensu lato, 1990) exendin-3 mRNA |
+| U77613.1 | *H. suspectum* exendin-4 mRNA |
+| EU790960.1 | *H. suspectum cinctum* exendin-2 mRNA |
+
+```
+cd ${PROJDIR}/datasets/query_fastas/nucleotide
+for ACC in AJ580309.1 U77613.1 EU790960.1; do
+  efetch -db nuccore -id ${ACC} -format fasta > ${ACC%%.*}.fa
+done
+```
+If EDirect is unavailable, download them from NCBI Nucleotide by hand; `AJ580309.fa` is the
+one `2e_rescue_locus.py` needs.
