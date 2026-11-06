@@ -24,7 +24,7 @@ back to its TOGA2 `q_gene`, projection and coordinates.
 
 ## Set up environment
 ```
-sinteractive --cpus-per-task=8 --mem=16g --time=4:00:00
+sinteractive 
 
 source myconda
 mamba activate exendin_env
@@ -158,3 +158,21 @@ Node labels are SH-aLRT/UFBoot; trust a node at ≥80 / ≥95. Bold = *Heloderma
 - **Compare with the exploratory tree** (`2_exendin_origin.md`) only after this one is read on
   its own terms. Differences come from what this protocol deliberately leaves out: ANC, the
   zebra finch root, rescued models, and paralogous projections.
+
+# 6. Where the genes sit: synteny plot
+One panel per species shows its exendin genes on the orthologous chromosome, between TOGA2's orthologs of the two boundary genes. Tandem duplications appear as several genes between SLC4A8 and AQP5, and copies outside the interval appear as extra tracks.
+```
+cd ${OUT}
+python3 ${SCRIPTDIR}/4d_plot_exendin_synteny.py \
+    --run ${TOGADIR}/target_HelSus \
+    --tips toga2_exendins/tips.tsv \
+    --boundaries SLC4A8,AQP5=LOC_00012326 --gff ${HELSUS_EVIANN_GFF} \
+    --svg exendin_synteny.svg --png exendin_synteny.png --layout exendin_synteny.tsv
+
+# with the paralogous projections too (dashed outlines)
+python3 ${SCRIPTDIR}/4d_plot_exendin_synteny.py \
+    --run ${TOGADIR}/target_HelSus \
+    --tips toga2_exendins_paralogs/tips.tsv \
+    --boundaries SLC4A8,AQP5=LOC_00012326 --gff ${HELSUS_EVIANN_GFF} \
+    --svg exendin_synteny.paralogs.svg --png exendin_synteny.paralogs.png
+```
