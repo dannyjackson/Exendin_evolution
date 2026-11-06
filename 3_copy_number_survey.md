@@ -23,6 +23,8 @@ PROJDIR=/data/Wilson_Lab/projects/GLP1_evolution/
 SCRIPTDIR=${PROJDIR}/scripts/Exendin_evolution
 GENOMEDIR=/data/Wilson_Lab/data/Exendin_Evolution/genomes
 OUT=${PROJDIR}/analyses/copy_number
+cd ${SCRIPTDIR}
+git pull
 mkdir -p ${OUT} ${GENOMEDIR} && cd ${OUT}
 ```
 
@@ -54,13 +56,15 @@ or FASTA is missing is skipped with a message rather than silently producing emp
 So the table is comparable end to end. HelSus is the positive control: it must recover all
 six known loci.
 ```
+bash ${SCRIPTDIR}/3a_scan_species.sh
+
+HEMCAP=$(ls ${PROJDIR}/analyses/exendin_origin/hemcap_g/ncbi_dataset/data/*/*_genomic.fna)
+python3 ${SCRIPTDIR}/2f_scan_interval.py --genome ${HEMCAP} --contig NC_069658.1 \
+    --region 429200000-429600000 --query lineage_queries.faa --out-prefix scan_HemCap
+
 HELSUS=${GENOMEDIR}/HelSus_GCF_057233095.1/ncbi_dataset/data/GCF_057233095.1/GCF_057233095.1_16-S_ref_genomic.fna
 python3 ${SCRIPTDIR}/2f_scan_interval.py --genome ${HELSUS} --contig NC_139459.1 \
     --region 188950000-189850000 --query lineage_queries.faa --out-prefix scan_HelSus
-
-HEMCAP=$(ls ${GENOMEDIR}/HemCap_*/ncbi_dataset/data/*/*_genomic.fna)
-python3 ${SCRIPTDIR}/2f_scan_interval.py --genome ${HEMCAP} --contig NC_069658.1 \
-    --region 429200000-429600000 --query lineage_queries.faa --out-prefix scan_HemCap
 ```
 Check `scan_HelSus_loci.tsv` recovers ANC (189,489,482), the Frag1 copy (189,527,255),
 exendin-2 (189,564,066), exendin-4 (189,613,335) and the two distal copies (189,371,236
@@ -105,3 +109,63 @@ Loci found here are **not** added to the stage 2 tree: remnants and pseudogenes 
 branches and destabilise an already weakly resolved backbone. They are presence/absence
 evidence. Any locus that comes out a clean, intact candidate gene can be rebuilt with
 `2e_rescue_locus.py` and considered for the tree on its own merits.
+
+
+## Were these genes annotated as seomthing else?
+cd ${PROJDIR}/analyses/copy_number
+
+for SP in HemCap:GCF_027244095.1:NC_069658.1 EubMac:GCF_028583425.1:NC_072808.1; do
+  IFS=: read -r LAB ACC CTG <<< "$SP"
+  [[ -d gff_${LAB} ]] || { datasets download genome accession ${ACC} --include gff3 \
+       --filename ${LAB}_gff.zip && unzip -o -q ${LAB}_gff.zip -d gff_${LAB}; }
+  G=$(ls gff_${LAB}/ncbi_dataset/data/*/genomic.gff)
+
+  echo "=== $LAB"
+  awk -F'\t' -v OFS='\t' 'NR>1 && $2!="" {print $2, $3, $7}' scan_${LAB}_loci.tsv \
+  | while read -r LO HI STATE; do
+      HITS=$(awk -F'\t' -v C="$CTG" -v L="$LO" -v H="$HI" '
+        $1==C && $3=="gene" && $4<=H && $5>=L {
+          n=$9; sub(/.*;Name=/,"",n); sub(/;.*/,"",n)
+          b=$9; sub(/.*gene_biotype=/,"",b); sub(/;.*/,"",b)
+          printf "%s(%s) ", n, b }' "$G")
+      printf '%s-%s\t%s\t%s\n' "$LO" "$HI" "${HITS:-NONE}" "$STATE"
+    done
+done
+
+
+for L in LOC128344056 LOC129346425 LOC129345942 LOC129345906; do
+  printf '%s\t' $L
+  grep -h "$L" gff_*/ncbi_dataset/data/*/genomic.gff | awk -F'\t' '$3=="mRNA"' \
+    | grep -o 'product=[^;]*' | sort -u | paste -sd'; '
+done
+
+seqkit grep -p HemCap_ANC ${PROJDIR}/analyses/exendin_origin/exendin_origin_aa.fa > hemcap.faa
+
+python3 ${SCRIPTDIR}/2e_rescue_locus.py --genome $HEMCAP --contig NC_069658.1 \
+    --region 429388000-429394000 --query hemcap.faa --protein --min-identity 40 \
+    --name HemCap_390334 --outdir rescued_hemcap
+
+awk -F'\t' '$1==5' scan_HemCap_hits.tsv | cut -f2,3,4,5,6,8,9,12,14
+
+samtools faidx $HEMCAP NC_069658.1:429392280-429392460 \
+  | seqkit translate -f 6 --trim | seqkit seq -w 0
+
+seqkit grep -p HelSus_A076_EX2 lineage_queries.faa > q_ex2.faa
+python3 ${SCRIPTDIR}/2e_rescue_locus.py --genome $HEMCAP --contig NC_069658.1 \
+    --region 429388000-429394000 --query q_ex2.faa --protein \
+    --min-identity 30 --evalue 1e-2 \
+    --name HemCap_A030 --outdir rescued_hemcap
+
+seqkit grep -p HelSus_A038 lineage_queries.faa > q_a038.faa
+python3 ${SCRIPTDIR}/2e_rescue_locus.py --genome $HEMCAP --contig NC_069658.1 \
+    --region 429388000-429394000 --query q_a038.faa --protein \
+    --min-identity 30 --evalue 1e-2 \
+    --name HemCap_A030 --outdir rescued_hemcap
+
+for Q in HemCap_ANC HelSus_A038 HelSus_A076_EX2 HelSus_A126_EX4 HelSus_S379; do
+  seqkit grep -p $Q lineage_queries.faa > q_tmp.faa
+  echo "== $Q"
+  python3 ${SCRIPTDIR}/2e_rescue_locus.py --genome $HEMCAP --contig NC_069658.1 \
+      --region 429388000-429394000 --query q_tmp.faa --protein \
+      --min-identity 30 --evalue 1e-2 --name tmp --outdir /tmp/rq 2>&1 | head -2
+done
