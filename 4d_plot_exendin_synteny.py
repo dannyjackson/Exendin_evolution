@@ -1,25 +1,39 @@
 #!/usr/bin/env python3
 """
 Plot, for every species, where each TOGA2-annotated exendin gene sits on the
-orthologous chromosome, between the two conserved boundary genes (AQP5 and
-SLC4A8). One track per contig, so tandem duplications show up as
-several genes between the boundaries, and copies elsewhere as extra tracks.
+orthologous chromosome, between the two conserved boundary genes (SLC4A8 and
+AQP5), with the species tree alongside. One track per contig, so tandem
+duplications show up as several genes between the boundaries, and copies
+elsewhere as extra tracks.
 
-Inputs are TOGA2 only:
+Inputs are TOGA2 only, plus the species tree for order:
   - the exendin genes: tips.tsv from 4b_collect_toga2_exendins.py (every row is
     drawn; rows with included = no are drawn hollow, so status filters stay visible);
-  - the boundary genes: TOGA2 ortholog projections of AQP5 and SLC4A8 in each query
-    (orthology_classification.tsv + query_annotation.bed + loss_summary.tsv).
+  - the boundary genes: TOGA2 ortholog projections of the two genes in each query
+    (orthology_classification.tsv + query_annotation.bed + loss_summary.tsv);
+  - --species-tree (optional): Newick; species are drawn in its tip order with the
+    tree (topology only, or --branch-lengths) to the left. Tree tips are matched to
+    query codes exactly, or as Genus_species -> GenSpe (Heloderma_suspectum -> HelSus);
+    --tree-map TSV (tree_tip<TAB>query) overrides. Unmatched names are reported.
 
 Boundary genes are given as NAME=REFERENCE_GENE_ID. A NAME with no ID is looked up
 in --gff: the gene whose attributes contain NAME as a whole word, nearest to the
 HelSus exendin genes. The IDs actually used are printed, so check them.
 
+One boundary locus per contig: overlapping projections of a boundary gene (isoforms,
+chains) are merged, the locus nearest the exendin genes is kept, and within it the
+projection with the best TOGA2 status, then the lowest mRNA number. A boundary gene
+longer than --clip-kb is drawn clipped on the side away from the exendins (marked
+'//'); its true coordinates are kept in the layout table.
+
 Orientation: every track is drawn with the first --boundaries gene on the left
 (default SLC4A8, which keeps HelSus chr2 in its own orientation, as in the
 "SLC4A8 - ANC - AQP5" interval). If both boundaries are on a track, their order
 decides it; otherwise a track is flipped when its boundary gene (or, failing that,
-its exendin genes) lies on the opposite strand from HelSus. The flip is recorded in layout.tsv.
+its exendin genes) lies on the opposite strand from HelSus.
+
+Labels are stacked in tiers above the track so they do not overlap, with a leader
+line to the gene when lifted. Labels drop the species prefix of the tip name.
 
 Read-only on the TOGA2 directory. Writes the SVG (stdout or --svg), optional PNG,
 and --layout (one row per drawn feature).
@@ -29,6 +43,7 @@ Usage
       --run ${TOGADIR}/target_HelSus \
       --tips toga2_exendins/tips.tsv \
       --boundaries SLC4A8,AQP5=LOC_00012326 --gff ${HELSUS_EVIANN_GFF} \
+      --species-tree ${CACTUSDIR}/Anguimorpha_species_tree_iteration-01_5-23-26.nwk \
       --svg exendin_synteny.svg --png exendin_synteny.png --layout exendin_synteny.tsv
 """
 import argparse, csv, gzip, html, os, re, shutil, subprocess, sys, tempfile
@@ -134,6 +149,111 @@ def write_png(svg, path, w):
     print("[warn] no SVG converter found; PNG not written (mamba install -c conda-forge cairosvg)", file=sys.stderr)
 
 
+
+
+# ---------------- species tree ----------------
+class Node:
+    __slots__ = ("name", "length", "children", "x", "y")
+
+    def __init__(self):
+        self.name, self.length, self.children, self.x, self.y = "", 0.0, [], 0.0, 0.0
+
+
+def parse_newick(s):
+    s = re.sub(r"\[[^\]]*\]", "", s.strip()).rstrip(";")
+    i, root, stack = 0, Node(), []
+    cur = root
+    while i < len(s):
+        c = s[i]
+        if c == "(":
+            n = Node(); cur.children.append(n); stack.append(cur); cur = n; i += 1
+        elif c == ",":
+            n = Node(); stack[-1].children.append(n); cur = n; i += 1
+        elif c == ")":
+            cur = stack.pop(); i += 1
+        elif c == ":":
+            m = re.match(r":([^,():;]+)", s[i:]); cur.length = float(m.group(1)); i += len(m.group(0))
+        elif c.isspace():
+            i += 1
+        else:
+            m = re.match(r"('[^']*'|[^,():;]+)", s[i:]); cur.name = m.group(1).strip("'").strip(); i += len(m.group(0))
+    return root.children[0] if len(root.children) == 1 and not root.name else root
+
+
+def leaves(n):
+    return [n] if not n.children else [l for c in n.children for l in leaves(c)]
+
+
+def match_tip(name, queries):
+    """Tree tip -> query code: exact, case-insensitive, or Genus_species -> GenSpe."""
+    if name in queries:
+        return name
+    low = {q.lower(): q for q in queries}
+    if name.lower() in low:
+        return low[name.lower()]
+    parts = [p for p in re.split(r"[_\s.]+", name) if p]
+    if len(parts) >= 2:
+        code = (parts[0][:3] + parts[1][:3]).lower()
+        if code in low:
+            return low[code]
+    return None
+
+
+def prune(n, keep):
+    """Drop leaves not in keep; collapse nodes left with one child (lengths are summed)."""
+    if not n.children:
+        return n if n.name in keep else None
+    kids = [k for k in (prune(c, keep) for c in n.children) if k is not None]
+    if not kids:
+        return None
+    if len(kids) == 1:
+        kids[0].length += n.length
+        return kids[0]
+    n.children = kids
+    return n
+
+
+# ---------------- tracks ----------------
+def choose_boundary(ps, ref_point):
+    """Merge overlapping projections into loci; keep the locus nearest ref_point (or the best one)."""
+    ps = sorted(ps, key=lambda p: p[1])
+    loci, cur, end = [], [], -1
+    for p in ps:
+        if cur and p[1] > end:
+            loci.append(cur); cur, end = [], -1
+        cur.append(p); end = max(end, p[2])
+    if cur:
+        loci.append(cur)
+
+    def best(locus):
+        return sorted(locus, key=lambda p: (RANK.get(p[4], 99), isoform(p[5]), p[2] - p[1]))[0]
+    if ref_point is None:
+        return best(sorted(loci, key=lambda L: min(RANK.get(p[4], 99) for p in L))[0])
+    return best(min(loci, key=lambda L: min(min(abs(p[1] - ref_point), abs(p[2] - ref_point)) for p in L)))
+
+
+def isoform(projection):
+    m = re.search(r"-mRNA-(\d+)", projection)
+    return int(m.group(1)) if m else 99
+
+
+def place_labels(items, max_tiers=8, gap=4):
+    """items: [(centre_x, width)] -> tier per item (0 = lowest), greedy left to right."""
+    tiers, out = [], []
+    for cx, w in items:
+        l, r = cx - w / 2, cx + w / 2
+        for k, right in enumerate(tiers):
+            if l >= right + gap:
+                tiers[k] = r; out.append(k); break
+        else:
+            if len(tiers) < max_tiers:
+                tiers.append(r); out.append(len(tiers) - 1)
+            else:
+                k = min(range(len(tiers)), key=lambda k: tiers[k])
+                tiers[k] = max(tiers[k], r); out.append(k)
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--run", required=True, help="${TOGADIR}/target_HelSus")
@@ -142,12 +262,17 @@ def main():
                     help="two NAME[=REF_GENE_ID], left one first")
     ap.add_argument("--gff", help="reference GFF, to look up boundary names given without an ID")
     ap.add_argument("--reference-query", default="HelSus", help="query that sets the orientation")
-    ap.add_argument("--order", help="comma-separated query order, or a file with one query per line")
-    ap.add_argument("--pad-kb", type=float, default=20.0, help="margin around each track")
-    ap.add_argument("--min-kb", type=float, default=0.0,
-                    help="minimum axis length (kb), e.g. to match another figure")
+    ap.add_argument("--species-tree", help="Newick species tree; sets the order and is drawn on the left")
+    ap.add_argument("--tree-map", help="TSV tree_tip<TAB>query, for tips that do not match automatically")
+    ap.add_argument("--branch-lengths", action="store_true", help="draw tree branch lengths (default: topology)")
+    ap.add_argument("--order", help="comma-separated query order, or a file with one query per line "
+                                    "(ignored with --species-tree)")
+    ap.add_argument("--pad-kb", type=float, default=10.0, help="margin around each track")
+    ap.add_argument("--clip-kb", type=float, default=50.0,
+                    help="draw boundary genes longer than this clipped (0 = never)")
+    ap.add_argument("--min-kb", type=float, default=0.0, help="minimum axis length (kb)")
     ap.add_argument("--title", default="Exendin genes between the conserved boundary genes (TOGA2, HelSus reference)")
-    ap.add_argument("--width", type=int, default=1200)
+    ap.add_argument("--width", type=int, default=1400)
     ap.add_argument("--svg", help="output SVG (default stdout)")
     ap.add_argument("--png")
     ap.add_argument("--layout", help="TSV of every drawn feature")
@@ -181,34 +306,54 @@ def main():
         by_q[t["query"]].append(dict(kind="exendin", name=t["tip"], group=t["group"], chrom=t["q_chrom"],
                                      start=int(t["q_start"]), end=int(t["q_end"]), strand=t["q_strand"],
                                      status=t["status"], included=t["included"] == "yes",
-                                     orth=t.get("orthology_class", ""), cls=t.get("kind", "ortholog")))
+                                     orth=t.get("orthology_class", ""), cls=t.get("kind", "ortholog"),
+                                     clip=""))
     queries = sorted(d[6:] for d in os.listdir(a.run) if d.startswith("query_"))
     bnd = {q: boundary_projections(os.path.join(a.run, "query_" + q), set(bids)) for q in queries}
 
-    # reference strands, for orientation
     ref_strand = {}
     for gid, name in bids.items():
         hs = bnd.get(a.reference_query, {}).get(gid, [])
         if hs:
-            ref_strand[name] = sorted(hs, key=lambda x: RANK.get(x[4], 99))[0][3]
+            ref_strand[name] = sorted(hs, key=lambda x: (RANK.get(x[4], 99), isoform(x[5])))[0][3]
     ex_ref_strand = {t["group"]: t["q_strand"] for t in ref_tips}
 
     tracks = []
     for q in queries:
-        ex = by_q.get(q, [])
         contigs = defaultdict(list)
-        for f in ex:
+        for f in by_q.get(q, []):
             contigs[f["chrom"]].append(f)
-        # boundary projections: keep those on an exendin contig; if none, the best one anywhere
+        ex_mid = {c: sum((f["start"] + f["end"]) / 2 for f in fs) / len(fs) for c, fs in contigs.items()}
         for gid, name in bids.items():
             ps = bnd[q].get(gid, [])
-            on = [p for p in ps if p[0] in contigs]
-            for p in (on or sorted(ps, key=lambda x: RANK.get(x[4], 99))[:1]):
+            on = defaultdict(list)
+            for p in ps:
+                if p[0] in ex_mid:
+                    on[p[0]].append(p)
+            picks = ([choose_boundary(v, ex_mid[c]) for c, v in on.items()] if on
+                     else ([choose_boundary(ps, None)] if ps else []))
+            for p in picks:
                 contigs[p[0]].append(dict(kind="boundary", name=name, group=name, chrom=p[0], start=p[1],
-                                          end=p[2], strand=p[3], status=p[4], included=True, orth="", cls=""))
+                                          end=p[2], strand=p[3], status=p[4], included=True, orth=p[5],
+                                          cls="", clip=""))
         if not contigs:
-            tracks.append(dict(query=q, chrom="", feats=[], flip=False, why="no exendin or boundary ortholog"))
+            tracks.append(dict(query=q, chrom="", feats=[], flip=False, why="no exendin or boundary ortholog",
+                               main=True))
             continue
+        # clip long boundary genes on the side away from the exendins (or the other boundary)
+        for c, fs in contigs.items():
+            for f in fs:
+                if f["kind"] != "boundary" or not a.clip_kb or f["end"] - f["start"] <= a.clip_kb * 1000:
+                    continue
+                others = [g for g in fs if g is not f]
+                if not others:
+                    continue
+                ref = sum((g["start"] + g["end"]) / 2 for g in others) / len(others)
+                f["true"] = (f["start"], f["end"])
+                if (f["start"] + f["end"]) / 2 < ref:
+                    f["start"], f["clip"] = f["end"] - int(a.clip_kb * 1000), "start"
+                else:
+                    f["end"], f["clip"] = f["start"] + int(a.clip_kb * 1000), "end"
         main = max(contigs, key=lambda c: (sum(f["kind"] == "boundary" for f in contigs[c]),
                                             sum(f["kind"] == "exendin" for f in contigs[c])))
         for c in sorted(contigs, key=lambda c: (c != main, c)):
@@ -216,7 +361,7 @@ def main():
             b = {f["name"]: f for f in fs if f["kind"] == "boundary"}
             flip, why = False, "as is"
             if len(b) == 2:
-                flip = (b[left_name]["start"] > b[bnames[1]]["start"]); why = "boundary order"
+                flip = b[left_name]["start"] > b[bnames[1]]["start"]; why = "boundary order"
             elif b:
                 n, f = next(iter(b.items()))
                 if n in ref_strand:
@@ -225,18 +370,53 @@ def main():
                 votes = [f["strand"] != ex_ref_strand[f["group"]] for f in fs if f["group"] in ex_ref_strand]
                 if votes:
                     flip = sum(votes) > len(votes) / 2; why = "exendin strand"
+            # a boundary gene alone on its contig: keep the end that faces the interval
+            if len(fs) == 1 and fs[0]["kind"] == "boundary" and a.clip_kb \
+                    and fs[0]["end"] - fs[0]["start"] > a.clip_kb * 1000:
+                f = fs[0]
+                f["true"] = (f["start"], f["end"])
+                keep_genomic_end = (f["name"] == left_name) != flip   # left boundary faces right
+                if keep_genomic_end:
+                    f["start"], f["clip"] = f["end"] - int(a.clip_kb * 1000), "start"
+                else:
+                    f["end"], f["clip"] = f["start"] + int(a.clip_kb * 1000), "end"
             tracks.append(dict(query=q, chrom=c, feats=fs, flip=flip, why=why, main=c == main))
 
-    # ---- order ----
-    if a.order:
+    # ---- species order (tree, --order, or reference first) ----
+    tree = None
+    if a.species_tree:
+        tree = parse_newick(open(a.species_tree).read())
+        manual = {}
+        if a.tree_map:
+            for line in open(a.tree_map):
+                f = line.rstrip("\n").split("\t")
+                if len(f) >= 2 and not line.startswith("#"):
+                    manual[f[0]] = f[1]
+        matched, unmatched = {}, []
+        for lf in leaves(tree):
+            q = manual.get(lf.name) or match_tip(lf.name, queries)
+            if q:
+                matched[lf.name] = q; lf.name = q
+            else:
+                unmatched.append(lf.name)
+        if unmatched:
+            print(f"[info] tree tips with no TOGA2 query (pruned): {', '.join(unmatched)}", file=sys.stderr)
+        tree = prune(tree, set(matched.values()))
+        order = [lf.name for lf in leaves(tree)] if tree else []
+        missing = [q for q in queries if q not in order]
+        if missing:
+            print(f"[warn] queries not in the species tree (drawn below it): {', '.join(missing)}; "
+                  f"add them with --tree-map", file=sys.stderr)
+        order += missing
+    elif a.order:
         order = ([l.strip() for l in open(a.order) if l.strip()] if os.path.exists(a.order)
                  else a.order.split(","))
     else:
         order = [a.reference_query] + [q for q in queries if q != a.reference_query]
     rank = {q: i for i, q in enumerate(order)}
-    tracks.sort(key=lambda t: (rank.get(t["query"], len(rank)), not t.get("main", True), t["chrom"]))
+    tracks.sort(key=lambda t: (rank.get(t["query"], len(rank)), not t["main"], t["chrom"]))
 
-    # ---- coordinates: kb from the left edge of each track (after orientation) ----
+    # ---- genomic -> track coordinates (bp from the left edge, after orientation) ----
     pad = a.pad_kb * 1000
     for t in tracks:
         if not t["feats"]:
@@ -248,53 +428,120 @@ def main():
             if t["flip"]:
                 f["x0"], f["x1"] = hi - f["end"], hi - f["start"]
                 f["dir"] = {"+": "-", "-": "+"}.get(f["strand"], ".")
+                f["clipside"] = {"start": "right", "end": "left"}.get(f["clip"], "")
             else:
                 f["x0"], f["x1"] = f["start"] - lo, f["end"] - lo
                 f["dir"] = f["strand"]
+                f["clipside"] = {"start": "left", "end": "right"}.get(f["clip"], "")
     maxspan = max([t["span"] for t in tracks] + [a.min_kb * 1000, 1])
 
-    # ---- draw ----
+    # ---- horizontal layout ----
+    tree_w = 170 if tree else 0
+    left, sp_w, ctg_w = 15, 70, 175
+    plot_x0 = left + tree_w + sp_w + ctg_w
+    plot_w = a.width - plot_x0 - 25
+    X = lambda bp: plot_x0 + bp / maxspan * plot_w
+    CH = 4.7                                      # px per character at font-size 8
+
+    # ---- label tiers and vertical layout ----
+    y = 70
+    for t in tracks:
+        fs = sorted(t["feats"], key=lambda f: f["x0"])
+        t["feats"] = fs
+        ex = [f for f in fs if f["kind"] == "exendin"]
+        for f in ex:
+            f["label"] = f["name"].split("_", 1)[1] if "_" in f["name"] else f["name"]
+        tiers = place_labels([((X(f["x0"]) + X(f["x1"])) / 2, len(f["label"]) * CH) for f in ex])
+        for f, k in zip(ex, tiers):
+            f["tier"] = k
+        n_t = (max(tiers) + 1) if tiers else 0
+        t["y"] = y + 12 + n_t * 10                   # track line
+        t["h"] = 12 + n_t * 10 + 24
+        y += t["h"]
+    H = y + 70
+
     groups = sorted({f["group"] for t in tracks for f in t["feats"] if f["kind"] == "exendin"})
     col = {g: PALETTE[i % len(PALETTE)] for i, g in enumerate(groups)}
-    lab_w, left, top, row = 230, 15, 60, 46
-    plot_w = a.width - lab_w - left - 30
-    X = lambda bp: lab_w + left + bp / maxspan * plot_w
-    H = top + row * len(tracks) + 90
     out = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{a.width}" height="{H}" '
            f'font-family="Helvetica, Arial, sans-serif" font-size="11">',
            '<rect width="100%" height="100%" fill="white"/>',
            f'<text x="{left}" y="24" font-size="15" font-weight="bold">{html.escape(a.title)}</text>',
-           f'<text x="{left}" y="42" font-size="10" fill="#555">Each track drawn with {html.escape(left_name)} '
-           f'on the left; arrows give strand after orientation. Hollow = not in the tree '
-           f'(status/length filter); dashed outline = paralogous projection.</text>']
-    lay = []
-    prev_q = None
+           f'<text x="{left}" y="42" font-size="10" fill="#555">Tracks oriented with {html.escape(left_name)} '
+           f'on the left; arrows give strand after orientation. Hollow = not in the tree (status/length filter); '
+           f'dashed = paralogous projection; // = boundary gene clipped to {a.clip_kb:g} kb.</text>']
+
+    # species separators, names, contig labels
+    first = {}
     for i, t in enumerate(tracks):
-        y = top + i * row + 26
-        if t["query"] != prev_q and i:
-            out.append(f'<line x1="{left}" x2="{a.width - 15}" y1="{y - 30}" y2="{y - 30}" stroke="#ddd"/>')
-        qlab = t["query"] if t["query"] != prev_q else ""
-        prev_q = t["query"]
-        bold = ' font-weight="bold"' if t["query"].startswith("Hel") else ""
-        out.append(f'<text x="{left}" y="{y + 4}"{bold}>{html.escape(qlab)}</text>')
+        top = t["y"] - (t["h"] - 24)
+        if t["query"] not in first:
+            first[t["query"]] = t
+            if i:
+                out.append(f'<line x1="{left + tree_w}" x2="{a.width - 15}" y1="{top - 2:.1f}" y2="{top - 2:.1f}" '
+                           f'stroke="#e3e3e3"/>')
+            bold = ' font-weight="bold"' if t["query"].startswith("Hel") else ""
+            out.append(f'<text x="{left + tree_w + 6}" y="{t["y"] + 4:.1f}"{bold}>{html.escape(t["query"])}</text>')
         if not t["feats"]:
-            out.append(f'<text x="{lab_w + left}" y="{y + 4}" fill="#999" font-style="italic">{t["why"]}</text>')
+            out.append(f'<text x="{plot_x0}" y="{t["y"] + 4:.1f}" fill="#999" font-style="italic">{t["why"]}</text>')
             continue
-        flip_txt = " (rev)" if t["flip"] else ""
-        out.append(f'<text x="{left + 62}" y="{y + 4}" font-size="9" fill="#666">'
-                   f'{html.escape(t["chrom"][:24])}{flip_txt}</text>')
+        a_mb, b_mb = (t["hi"], t["lo"]) if t["flip"] else (t["lo"], t["hi"])
+        out.append(f'<text x="{left + tree_w + sp_w}" y="{t["y"] + 1:.1f}" font-size="9" fill="#444">'
+                   f'{html.escape(t["chrom"][:26])}{" (rev)" if t["flip"] else ""}</text>')
+        out.append(f'<text x="{left + tree_w + sp_w}" y="{t["y"] + 11:.1f}" font-size="8" fill="#888">'
+                   f'{max(a_mb, 0) / 1e6:.3f}–{max(b_mb, 0) / 1e6:.3f} Mb</text>')
+
+    # species tree
+    if tree:
+        for lf in leaves(tree):
+            lf.y = first[lf.name]["y"] if lf.name in first else 0
+        def depth(n, d=0.0):
+            n.x = d + (n.length if a.branch_lengths else 1.0)
+            for c in n.children:
+                depth(c, n.x)
+        tree.length = 0.0
+        depth(tree, -1.0 if not a.branch_lengths else 0.0)
+        if not a.branch_lengths:                    # cladogram: tips aligned at the right
+            def height(n):
+                return 0 if not n.children else 1 + max(height(c) for c in n.children)
+            H0 = height(tree)
+            def setx(n):
+                n.x = H0 - height(n)
+                for c in n.children:
+                    setx(c)
+            setx(tree)
+        maxx = max(l.x for l in leaves(tree)) or 1.0
+        TX = lambda v: left + v / maxx * (tree_w - 10)
+        def sety(n):
+            if n.children:
+                for c in n.children:
+                    sety(c)
+                n.y = (n.children[0].y + n.children[-1].y) / 2
+        sety(tree)
+        def draw(n):
+            for c in n.children:
+                out.append(f'<line x1="{TX(n.x):.1f}" y1="{c.y:.1f}" x2="{TX(c.x):.1f}" y2="{c.y:.1f}" '
+                           f'stroke="#333" stroke-width="1.2"/>')
+                draw(c)
+            if n.children:
+                out.append(f'<line x1="{TX(n.x):.1f}" y1="{n.children[0].y:.1f}" x2="{TX(n.x):.1f}" '
+                           f'y2="{n.children[-1].y:.1f}" stroke="#333" stroke-width="1.2"/>')
+            else:
+                out.append(f'<line x1="{TX(n.x):.1f}" y1="{n.y:.1f}" x2="{left + tree_w + 3}" y2="{n.y:.1f}" '
+                           f'stroke="#ccc" stroke-dasharray="2,2"/>')
+        draw(tree)
+
+    # tracks
+    lay = []
+    for t in tracks:
+        if not t["feats"]:
+            continue
+        y = t["y"]
         out.append(f'<line x1="{X(0):.1f}" x2="{X(t["span"]):.1f}" y1="{y}" y2="{y}" stroke="#999" stroke-width="2"/>')
-        # coordinate of the track ends, in Mb on the contig
-        lo_mb, hi_mb = (t["hi"], t["lo"]) if t["flip"] else (t["lo"], t["hi"])
-        out.append(f'<text x="{X(0):.1f}" y="{y + 16}" font-size="8" fill="#888">{max(lo_mb, 0) / 1e6:.3f} Mb</text>')
-        out.append(f'<text x="{X(t["span"]):.1f}" y="{y + 16}" font-size="8" fill="#888" text-anchor="end">'
-                   f'{max(hi_mb, 0) / 1e6:.3f} Mb</text>')
-        exs = sorted((f for f in t["feats"]), key=lambda f: f["x0"])
-        for k, f in enumerate(exs):
+        for f in t["feats"]:
             x0, x1 = X(f["x0"]), X(f["x1"])
             if x1 - x0 < 4:
                 m = (x0 + x1) / 2; x0, x1 = m - 2, m + 2
-            h, tip = 12, 5
+            h, tip = 12, min(5, (x1 - x0) * 0.6)
             c = BOUNDARY_COL if f["kind"] == "boundary" else col[f["group"]]
             if f["dir"] == "-":
                 pts = [(x0, y), (x0 + tip, y - h / 2), (x1, y - h / 2), (x1, y + h / 2), (x0 + tip, y + h / 2)]
@@ -304,20 +551,31 @@ def main():
                 pts = [(x0, y - h / 2), (x1, y - h / 2), (x1, y + h / 2), (x0, y + h / 2)]
             fill = c if f["included"] else "white"
             dash = ' stroke-dasharray="2,1.5"' if f["cls"] == "paralog" else ""
-            title = (f'{f["name"]} {f["chrom"]}:{f["start"]}-{f["end"]} ({f["strand"]}) status {f["status"]} '
-                     f'{f["orth"]}')
+            s0, e0 = f.get("true", (f["start"], f["end"]))
+            title = f'{f["name"]} {f["chrom"]}:{s0}-{e0} ({f["strand"]}) status {f["status"]} {f["orth"]}'
             out.append(f'<polygon points="{" ".join(f"{px:.1f},{py:.1f}" for px, py in pts)}" fill="{fill}" '
                        f'stroke="{c}" stroke-width="1.2"{dash}><title>{html.escape(title)}</title></polygon>')
-            short = f["name"].split("_", 1)[1] if f["kind"] == "exendin" and "_" in f["name"] else f["name"]
-            ly = y - 9 - (k % 2) * 9
-            out.append(f'<text x="{(x0 + x1) / 2:.1f}" y="{ly:.1f}" font-size="8" text-anchor="middle" '
-                       f'fill="{c}">{html.escape(short)}</text>')
+            if f["clipside"]:
+                cx = x0 + 4 if f["clipside"] == "left" else x1 - 10
+                for dx in (0, 4):
+                    out.append(f'<line x1="{cx + dx:.1f}" y1="{y + h / 2 + 2:.1f}" x2="{cx + dx + 3:.1f}" '
+                               f'y2="{y - h / 2 - 2:.1f}" stroke="white" stroke-width="2"/>')
+            if f["kind"] == "boundary":
+                out.append(f'<text x="{(x0 + x1) / 2:.1f}" y="{y + h / 2 + 10:.1f}" font-size="8" '
+                           f'text-anchor="middle" fill="#444">{html.escape(f["name"])}</text>')
+            else:
+                ly = y - h / 2 - 3 - f["tier"] * 10
+                if f["tier"]:
+                    out.append(f'<line x1="{(x0 + x1) / 2:.1f}" y1="{y - h / 2:.1f}" x2="{(x0 + x1) / 2:.1f}" '
+                               f'y2="{ly + 2:.1f}" stroke="{c}" stroke-width="0.5" opacity="0.6"/>')
+                out.append(f'<text x="{(x0 + x1) / 2:.1f}" y="{ly:.1f}" font-size="8" text-anchor="middle" '
+                           f'fill="{c}">{html.escape(f["label"])}</text>')
             lay.append([t["query"], t["chrom"], "rev" if t["flip"] else "fwd", t["why"], f["kind"], f["name"],
-                        f["group"], f["start"], f["end"], f["strand"], f["status"],
-                        "yes" if f["included"] else "no", f"{f['x0'] / 1000:.1f}", f"{f['x1'] / 1000:.1f}"])
+                        f["group"], s0, e0, f["strand"], f["status"], "yes" if f["included"] else "no",
+                        f["clip"] or "no", f"{f['x0'] / 1000:.1f}", f"{f['x1'] / 1000:.1f}"])
 
     # scale bar and legend
-    yb = top + row * len(tracks) + 20
+    yb = H - 40
     step = next(s for s in (1e3, 2e3, 5e3, 1e4, 2e4, 5e4, 1e5, 2e5, 5e5, 1e6, 2e6, 5e6, 1e7)
                 if s >= maxspan / 6)
     out.append(f'<line x1="{X(0):.1f}" x2="{X(step):.1f}" y1="{yb}" y2="{yb}" stroke="#333" stroke-width="2"/>')
@@ -339,7 +597,7 @@ def main():
     if a.layout:
         with open(a.layout, "w") as fh:
             fh.write("\t".join(["query", "contig", "orientation", "oriented_by", "kind", "name", "group",
-                                "start", "end", "strand", "status", "in_tree", "x0_kb", "x1_kb"]) + "\n")
+                                "start", "end", "strand", "status", "in_tree", "clipped", "x0_kb", "x1_kb"]) + "\n")
             for r in lay:
                 fh.write("\t".join(map(str, r)) + "\n")
     print(f"[info] {len(tracks)} tracks from {len({t['query'] for t in tracks})} queries; "
